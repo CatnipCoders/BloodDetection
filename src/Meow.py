@@ -1,0 +1,2 @@
+def sayMeow():
+	print("Meow")
