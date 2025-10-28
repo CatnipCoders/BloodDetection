@@ -1,0 +1,25 @@
+{
+    "data": {
+        "dataset_path": "dataset_blood_group",
+        "img_size": [256, 256],
+        "batch_size": 32,
+        "test_split": 0.2
+    },
+    "model": {
+        "architecture": "resnet50",
+        "input_shape": [256, 256, 3],
+        "dense_layers": [128, 64],
+        "dropout_rates": [0.3, 0.2],
+        "learning_rate": 0.001
+    },
+    "training": {
+        "epochs": 50,
+        "early_stopping_patience": 5,
+        "save_best_only": true,
+        "model_save_path": "models/blood_group_detection_model.h5"
+    },
+    "logging": {
+        "level": "INFO",
+        "log_dir": "logs"
+    }
+}
