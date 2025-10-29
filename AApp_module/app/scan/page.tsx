@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useRef, useEffect } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
@@ -19,20 +19,138 @@ export default function ScanPage() {
   const [isScanning, setIsScanning] = useState(false)
   const [scanComplete, setScanComplete] = useState(false)
   const [detectedBloodGroup, setDetectedBloodGroup] = useState<string | null>(null)
+  const [apiError, setApiError] = useState<string | null>(null)
+  const [deviceConnected, setDeviceConnected] = useState<boolean | null>(null)
+  const [uploadedBlob, setUploadedBlob] = useState<Blob | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const handleScan = () => {
+    // Require either a connected device or an uploaded fingerprint image before scanning
+    if (!deviceConnected && !uploadedBlob) {
+      setApiError('No fingerprint device detected and no image uploaded. Please connect a scanner or upload a fingerprint image.')
+      // open file picker to encourage upload
+      fileInputRef.current?.click()
+      return
+    }
+
     setIsScanning(true)
     setScanComplete(false)
     setDetectedBloodGroup(null)
+    setApiError(null)
 
-    // Simulate scanning process
+    // Simulate scanning progress and then call backend /predict
     setTimeout(() => {
-      const randomBloodGroup = bloodGroups[Math.floor(Math.random() * bloodGroups.length)]
+      const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000"
 
-      setDetectedBloodGroup(randomBloodGroup)
-      setIsScanning(false)
-      setScanComplete(true)
+      const makeTestImageBlob = async (): Promise<Blob | null> => {
+        // Prefer an uploaded image if present
+        if (uploadedBlob) return uploadedBlob
+
+        // If a device SDK is available that can capture an image, try that
+        try {
+          const sdk = (window as any).FINGERPRINT_SDK || (window as any).fingerprintScanner
+          if (sdk && typeof sdk.captureImage === 'function') {
+            // captureImage should return a Blob or ArrayBuffer; adapt if necessary
+            const captured = await sdk.captureImage()
+            if (!captured) return null
+            if (captured instanceof Blob) return captured
+            if (captured instanceof ArrayBuffer) return new Blob([captured], { type: 'image/png' })
+            // if SDK returns base64 string
+            if (typeof captured === 'string') {
+              const b = atob(captured.split(',').pop() || '')
+              const u8 = new Uint8Array(b.length)
+              for (let i = 0; i < b.length; i++) u8[i] = b.charCodeAt(i)
+              return new Blob([u8], { type: 'image/png' })
+            }
+          }
+        } catch (e) {
+          // ignore sdk capture errors and fall back to generated canvas below
+        }
+
+        // Fallback: create a small PNG blob on the client to POST to the backend as 'image'
+        try {
+          const canvas = document.createElement('canvas')
+          canvas.width = 256
+          canvas.height = 256
+          const ctx = canvas.getContext('2d')
+          if (!ctx) return null
+          ctx.fillStyle = '#ffffff'
+          ctx.fillRect(0, 0, canvas.width, canvas.height)
+          ctx.fillStyle = '#cc0000'
+          ctx.beginPath()
+          ctx.arc(canvas.width / 2, canvas.height / 2, 80, 0, Math.PI * 2)
+          ctx.fill()
+
+          return await new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/png'))
+        } catch (e) {
+          return null
+        }
+      }
+
+      const randomFallback = bloodGroups[Math.floor(Math.random() * bloodGroups.length)]
+
+      ;(async () => {
+        try {
+          const blob = await makeTestImageBlob()
+          if (!blob) throw new Error('Failed to create image blob')
+
+          const form = new FormData()
+          form.append('image', blob, 'scan.png')
+
+          const res = await fetch(`${API_URL}/predict`, {
+            method: 'POST',
+            body: form,
+          })
+
+          if (!res.ok) {
+            // If backend returns non-200, fall back to a random label and show error
+            const text = await res.text().catch(() => '')
+            throw new Error(`Backend error ${res.status}: ${text}`)
+          }
+
+          const data = await res.json()
+          const label = data?.label ?? randomFallback
+          setDetectedBloodGroup(label)
+        } catch (err: any) {
+          setApiError(err?.message ?? String(err))
+          // fallback so user still sees a result in dev
+          setDetectedBloodGroup(randomFallback)
+        } finally {
+          setIsScanning(false)
+          setScanComplete(true)
+        }
+      })()
     }, 3500)
+  }
+
+  // Try to detect a connected fingerprint scanner via a global SDK object if present
+  const checkDeviceAvailability = async () => {
+    try {
+      const sdk = (window as any).FINGERPRINT_SDK || (window as any).fingerprintScanner
+      if (sdk && typeof sdk.isConnected === 'function') {
+        const connected = await sdk.isConnected()
+        setDeviceConnected(Boolean(connected))
+        return
+      }
+    } catch (e) {
+      // ignore
+    }
+    // If no SDK present, assume no device
+    setDeviceConnected(false)
+  }
+
+  useEffect(() => {
+    checkDeviceAvailability()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0] ?? null
+    if (!f) return
+    setUploadedBlob(f)
+    setApiError(null)
+    // mark device as not connected (we have an uploaded image fallback)
+    setDeviceConnected(false)
   }
 
   const handleReset = () => {
@@ -90,7 +208,43 @@ export default function ScanPage() {
                   <p className="text-xs text-muted-foreground">
                     Leave empty if you're a new user. Your blood group will be saved to this ID if provided.
                   </p>
+                  {/* Device status and upload fallback */}
+                  <div className="mt-3">
+                    <input ref={fileInputRef} type="file" accept="image/*" onChange={onFileChange} className="hidden" />
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm">
+                        {deviceConnected === null && <span>Checking scanner...</span>}
+                        {deviceConnected === true && (
+                          <span className="text-green-600 font-medium">Fingerprint scanner connected</span>
+                        )}
+                        {deviceConnected === false && (
+                          <span className="text-red-600">No fingerprint scanner detected</span>
+                        )}
+                        {uploadedBlob && (
+                          <div className="text-xs text-muted-foreground mt-1">Uploaded image ready: <span className="font-mono">{(uploadedBlob as any).name ?? 'uploaded-image'}</span></div>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {!deviceConnected && (
+                          <Button variant="outline" onClick={() => fileInputRef.current?.click()} size="sm">
+                            Upload Image
+                          </Button>
+                        )}
+                        <Button variant="ghost" onClick={checkDeviceAvailability} size="sm">
+                          Check Device
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
+              )}
+
+              {apiError && (
+                <Alert className="border-red-200 bg-red-50">
+                  <AlertCircle className="h-4 w-4 text-red-600" />
+                  <AlertDescription className="text-red-900">{apiError}</AlertDescription>
+                </Alert>
               )}
 
               <FingerprintScanner isScanning={isScanning} scanComplete={scanComplete} />

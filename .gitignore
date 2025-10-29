@@ -1,8 +1,8 @@
 /AApp_module/node_modules
 
 # production
-/blood-group-app/build
-
+/AApp_module/build
+/AApp_module/.next
 # debug
 /blood-group-app/npm-debug.log*
 /blood-group-app/yarn-debug.log*

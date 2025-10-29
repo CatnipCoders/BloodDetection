@@ -18,8 +18,13 @@ import glob
 from flask import Flask, request, jsonify
 from PIL import Image
 import numpy as np
+from flask_cors import CORS
+from db import create_user, get_user, update_user_blood_group, list_users, get_user_history
 
 app = Flask(__name__)
+# Enable CORS so the Next.js frontend (running on a different origin during dev)
+# can call /predict, /health, etc. In production restrict origins as appropriate.
+CORS(app)
 
 # Configuration
 MODEL_PATH = os.environ.get("MODEL_PATH", "model_blood_group_detection_resnet.h5")
@@ -114,6 +119,72 @@ def index():
         }
     }
     return jsonify(info), 200
+
+@app.route('/api/users', methods=['POST'])
+def register_user():
+    """Create a new user with their blood group and return the created user object."""
+    data = request.get_json()
+    if not data or not all(k in data for k in ('name', 'email', 'blood_group')):
+        return jsonify({'error': 'Missing required fields: name, email, blood_group'}), 400
+        
+    try:
+        user_id = create_user(
+            name=data['name'],
+            email=data['email'],
+            blood_group=data['blood_group'],
+            confidence=data.get('confidence')
+        )
+        # Fetch the created user and return it so clients can immediately display it
+        user = get_user(user_id)
+        if not user:
+            return jsonify({'error': 'Failed to retrieve created user'}), 500
+        return jsonify(user), 201
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/users/<int:user_id>', methods=['GET'])
+def get_user_details(user_id):
+    """Get user details by ID."""
+    user = get_user(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    return jsonify(user)
+
+@app.route('/api/users/<int:user_id>/blood-group', methods=['PUT'])
+def update_blood_group(user_id):
+    """Update a user's blood group."""
+    data = request.get_json()
+    if not data or 'blood_group' not in data:
+        return jsonify({'error': 'Missing blood_group in request'}), 400
+        
+    success = update_user_blood_group(
+        user_id=user_id,
+        blood_group=data['blood_group'],
+        confidence=data.get('confidence')
+    )
+    
+    if not success:
+        return jsonify({'error': 'User not found'}), 404
+    return jsonify({'status': 'updated'})
+
+@app.route('/api/users/<int:user_id>/history', methods=['GET'])
+def user_history(user_id):
+    """Get scan history for a user."""
+    if not get_user(user_id):
+        return jsonify({'error': 'User not found'}), 404
+        
+    history = get_user_history(user_id)
+    return jsonify(history)
+
+@app.route('/api/users', methods=['GET'])
+def list_all_users():
+    """Get list of all users."""
+    try:
+        limit = min(int(request.args.get('limit', 100)), 1000)
+        users = list_users(limit=limit)
+        return jsonify(users)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/favicon.ico')
