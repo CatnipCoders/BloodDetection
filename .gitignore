@@ -1,8 +1,4 @@
-/blood-group-app/node_modules
-
-# next.js
-/blood-group-app/.next/
-/blood-group-app/out/
+/AApp_module/node_modules
 
 # production
 /blood-group-app/build
