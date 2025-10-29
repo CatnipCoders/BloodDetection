@@ -17,3 +17,4 @@
 /blood-group-app/next-env.d.ts
 
 /fingerprint-main/myenv
+fingerprint-main/src/__pycache__
