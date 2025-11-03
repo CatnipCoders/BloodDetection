@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { useSearchParams } from "next/navigation"
 import { format } from "date-fns"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -30,6 +31,7 @@ export default function AdminPage() {
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedBloodGroup, setSelectedBloodGroup] = useState<string | null>(null)
+  const searchParams = useSearchParams()
 
   const loadUsers = async () => {
     try {
@@ -47,6 +49,14 @@ export default function AdminPage() {
   useEffect(() => {
     loadUsers()
   }, [])
+
+  // Pre-fill search if we navigated back from registration with an ID
+  useEffect(() => {
+    const newUserId = searchParams?.get('newUserId')
+    if (newUserId) {
+      setSearchQuery(newUserId)
+    }
+  }, [searchParams])
 
   // Filter users based on search query and blood group
   const filteredUsers = users.filter(user => {

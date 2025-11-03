@@ -3,6 +3,7 @@
 import type React from "react"
 
 import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
 import { useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
@@ -11,6 +12,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { ArrowLeft, CheckCircle2, UserPlus, Fingerprint } from "lucide-react"
+import { createUser } from "@/lib/api"
 
 const bloodGroups = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]
 
@@ -29,6 +31,7 @@ export default function RegisterPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [registrationComplete, setRegistrationComplete] = useState(false)
   const [generatedId, setGeneratedId] = useState<string | null>(null)
+  const router = useRouter()
 
   useEffect(() => {
     if (bloodGroupFromScan && bloodGroups.includes(bloodGroupFromScan)) {
@@ -39,14 +42,39 @@ export default function RegisterPage() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     setIsSubmitting(true)
-
-    // Simulate registration process
-    setTimeout(() => {
-      const newId = `BG${Math.floor(100000 + Math.random() * 900000)}`
-      setGeneratedId(newId)
-      setIsSubmitting(false)
-      setRegistrationComplete(true)
-    }, 2000)
+    // Call backend to create user
+    ;(async () => {
+      try {
+        const payload = {
+          name: formData.fullName,
+          email: formData.email,
+          blood_group: formData.bloodGroup,
+          // additional fields are stored client-side only; backend schema accepts name, email, blood_group
+        }
+        const created = await createUser(payload)
+        // Backend returns the created user object (id, name, email, blood_group...)
+        if (created && created.id) {
+          setGeneratedId(String(created.id))
+          setRegistrationComplete(true)
+          // Navigate to admin and pre-fill search to show the created user
+          try {
+            router.push(`/admin?newUserId=${created.id}`)
+          } catch (e) {
+            // Ignore navigation errors in non-client contexts
+          }
+        } else if (created && created.error) {
+          // Show error
+          alert('Registration failed: ' + created.error)
+        } else {
+          alert('Registration failed: unknown response from server')
+        }
+      } catch (err) {
+        console.error('Error creating user:', err)
+        alert('Registration failed. See console for details.')
+      } finally {
+        setIsSubmitting(false)
+      }
+    })()
   }
 
   const handleReset = () => {
@@ -102,7 +130,7 @@ export default function RegisterPage() {
                   </AlertDescription>
                 </Alert>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-3 gap-3">
                   <Link href="/" className="w-full">
                     <Button variant="outline" className="w-full bg-transparent">
                       <ArrowLeft className="w-4 h-4 mr-2" />
@@ -112,6 +140,11 @@ export default function RegisterPage() {
                   <Button onClick={handleReset} className="w-full bg-green-600 hover:bg-green-700">
                     Register Another
                   </Button>
+                  <Link href="/admin" className="w-full">
+                    <Button className="w-full bg-blue-600 hover:bg-blue-700">
+                      View in Admin
+                    </Button>
+                  </Link>
                 </div>
               </CardContent>
             </Card>
