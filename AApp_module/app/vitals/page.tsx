@@ -1,0 +1,349 @@
+"use client"
+
+import { useState, useEffect } from "react"
+import Link from "next/link"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { ArrowLeft, Activity, Heart, CheckCircle2, AlertCircle, RefreshCcw, Wifi, WifiOff } from "lucide-react"
+
+interface VitalSigns {
+  spo2: number | null
+  heartRate: number | null
+  fingerDetected?: boolean
+  dataValid?: boolean
+}
+
+export default function VitalsPage() {
+  const [vitalSigns, setVitalSigns] = useState<VitalSigns>({ spo2: null, heartRate: null })
+  const [isConnected, setIsConnected] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
+  const [history, setHistory] = useState<VitalSigns[]>([])
+
+  // Fetch vital signs from ESP32 gateway
+  useEffect(() => {
+    const ESP32_API_URL = process.env.NEXT_PUBLIC_ESP32_API_URL ?? "http://192.168.1.193/api/vitals"
+    let intervalId: NodeJS.Timeout
+
+    const fetchVitalSigns = async () => {
+      try {
+        const response = await fetch(ESP32_API_URL, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+          },
+          mode: 'cors',
+        })
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`)
+        }
+
+        const data = await response.json()
+        const newVitals = {
+          spo2: data.spo2 ?? data.SpO2 ?? null,
+          heartRate: data.heartRate ?? data.heart_rate ?? data.bpm ?? null,
+          fingerDetected: data.fingerDetected ?? undefined,
+          dataValid: data.dataValid ?? undefined
+        }
+        
+        setVitalSigns(newVitals)
+        setIsConnected(true)
+        setIsLoading(false)
+        setError(null)
+        setLastUpdate(new Date())
+
+        // Add to history (keep last 20 readings)
+        setHistory(prev => {
+          const updated = [...prev, newVitals]
+          return updated.slice(-20)
+        })
+      } catch (error: any) {
+        console.error('Failed to fetch vital signs from ESP32:', error)
+        setIsConnected(false)
+        setIsLoading(false)
+        setError(error.message || 'Connection failed')
+      }
+    }
+
+    // Initial fetch
+    fetchVitalSigns()
+
+    // Poll every 100ms for instant real-time updates
+    intervalId = setInterval(fetchVitalSigns, 100)
+
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId)
+      }
+    }
+  }, [])
+
+  const handleRefresh = () => {
+    setIsLoading(true)
+    setError(null)
+  }
+
+  const getSpO2Status = (spo2: number) => {
+    if (spo2 >= 95) return { text: 'Normal', color: 'text-green-600', bg: 'bg-green-500' }
+    if (spo2 >= 90) return { text: 'Low', color: 'text-yellow-600', bg: 'bg-yellow-500' }
+    return { text: 'Critical', color: 'text-red-600', bg: 'bg-red-500' }
+  }
+
+  const getHeartRateStatus = (hr: number) => {
+    if (hr >= 60 && hr <= 100) return { text: 'Normal (60-100)', color: 'text-green-600' }
+    if (hr < 60) return { text: 'Bradycardia (Low)', color: 'text-blue-600' }
+    return { text: 'Tachycardia (High)', color: 'text-red-600' }
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-purple-50 via-blue-50 to-white">
+      <div className="container mx-auto px-4 py-8">
+        <Link href="/">
+          <Button variant="ghost" className="mb-6">
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Back to Home
+          </Button>
+        </Link>
+
+        <div className="max-w-5xl mx-auto">
+          {/* Header */}
+          <div className="text-center mb-8">
+            <div className="flex justify-center mb-4">
+              <div className="bg-purple-600 p-4 rounded-full">
+                <Activity className="w-12 h-12 text-white" />
+              </div>
+            </div>
+            <h1 className="text-4xl font-bold text-gray-900 mb-3">Vital Signs Monitor</h1>
+            <p className="text-lg text-gray-600">Real-time SpO2 and Heart Rate monitoring</p>
+            
+            {/* Connection Status */}
+            <div className="flex items-center justify-center gap-2 mt-4">
+              {isConnected ? (
+                <>
+                  <Wifi className="w-5 h-5 text-green-600" />
+                  <span className="text-sm font-medium text-green-600">ESP32 Connected</span>
+                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                </>
+              ) : (
+                <>
+                  <WifiOff className="w-5 h-5 text-red-600" />
+                  <span className="text-sm font-medium text-red-600">ESP32 Disconnected</span>
+                  <div className="w-2 h-2 bg-red-500 rounded-full"></div>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Error Alert */}
+          {error && (
+            <Alert className="mb-6 border-red-200 bg-red-50">
+              <AlertCircle className="h-4 w-4 text-red-600" />
+              <AlertDescription className="text-red-900">
+                <strong>Connection Error:</strong> {error}
+                <br />
+                <span className="text-sm">Check ESP32 device and network connection.</span>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Loading State */}
+          {isLoading && !isConnected && (
+            <Alert className="mb-6 border-blue-200 bg-blue-50">
+              <Activity className="h-4 w-4 text-blue-600 animate-spin" />
+              <AlertDescription className="text-blue-900">
+                Connecting to ESP32 gateway...
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Main Vital Signs Display */}
+          <div className="grid md:grid-cols-2 gap-6 mb-6">
+            {/* SpO2 Card */}
+            <Card className="border-2 border-blue-200 shadow-lg bg-white">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-blue-100 p-3 rounded-full">
+                      <Activity className="w-8 h-8 text-blue-600" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-xl">Blood Oxygen</CardTitle>
+                      <CardDescription>SpO2 Level</CardDescription>
+                    </div>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-baseline gap-2 mb-4">
+                  <span className="text-6xl font-bold text-blue-600">
+                    {vitalSigns.spo2 ?? '--'}
+                  </span>
+                  <span className="text-3xl text-gray-500">%</span>
+                </div>
+                
+                {vitalSigns.spo2 !== null && (
+                  <>
+                    <div className="w-full bg-gray-200 rounded-full h-3 mb-3">
+                      <div 
+                        className={`h-3 rounded-full transition-all duration-500 ${getSpO2Status(vitalSigns.spo2).bg}`}
+                        style={{ width: `${Math.min(vitalSigns.spo2, 100)}%` }}
+                      ></div>
+                    </div>
+                    <p className={`text-base font-semibold ${getSpO2Status(vitalSigns.spo2).color}`}>
+                      ✓ {getSpO2Status(vitalSigns.spo2).text}
+                    </p>
+                  </>
+                )}
+
+                {vitalSigns.spo2 === null && (
+                  <p className="text-gray-400 text-sm">Waiting for sensor data...</p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Heart Rate Card */}
+            <Card className="border-2 border-red-200 shadow-lg bg-white">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-red-100 p-3 rounded-full">
+                      <Heart className={`w-8 h-8 text-red-600 ${vitalSigns.heartRate ? 'animate-pulse' : ''}`} />
+                    </div>
+                    <div>
+                      <CardTitle className="text-xl">Heart Rate</CardTitle>
+                      <CardDescription>Beats per minute</CardDescription>
+                    </div>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-baseline gap-2 mb-4">
+                  <span className="text-6xl font-bold text-red-600">
+                    {vitalSigns.heartRate ?? '--'}
+                  </span>
+                  <span className="text-3xl text-gray-500">bpm</span>
+                </div>
+                
+                {vitalSigns.heartRate !== null && (
+                  <p className={`text-base font-semibold ${getHeartRateStatus(vitalSigns.heartRate).color}`}>
+                    ✓ {getHeartRateStatus(vitalSigns.heartRate).text}
+                  </p>
+                )}
+
+                {vitalSigns.heartRate === null && (
+                  <p className="text-gray-400 text-sm">Waiting for sensor data...</p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Status Cards */}
+          <div className="grid md:grid-cols-3 gap-4 mb-6">
+            {/* Finger Detection */}
+            {vitalSigns.fingerDetected !== undefined && (
+              <Card className="bg-white">
+                <CardContent className="pt-6">
+                  <div className="text-center">
+                    <p className="text-sm text-gray-600 mb-2">Finger Status</p>
+                    <p className={`text-lg font-bold ${vitalSigns.fingerDetected ? 'text-green-600' : 'text-gray-400'}`}>
+                      {vitalSigns.fingerDetected ? '✓ Detected' : '○ Not Detected'}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Data Validity */}
+            {vitalSigns.dataValid !== undefined && (
+              <Card className="bg-white">
+                <CardContent className="pt-6">
+                  <div className="text-center">
+                    <p className="text-sm text-gray-600 mb-2">Data Quality</p>
+                    <p className={`text-lg font-bold ${vitalSigns.dataValid ? 'text-green-600' : 'text-yellow-600'}`}>
+                      {vitalSigns.dataValid ? '✓ Valid' : '⚠ Calibrating'}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Last Update */}
+            <Card className="bg-white">
+              <CardContent className="pt-6">
+                <div className="text-center">
+                  <p className="text-sm text-gray-600 mb-2">Last Update</p>
+                  <p className="text-lg font-bold text-gray-800">
+                    {lastUpdate ? lastUpdate.toLocaleTimeString() : '--:--:--'}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Instructions and Actions */}
+          <Card className="bg-gradient-to-br from-purple-50 to-blue-50 border-purple-200">
+            <CardHeader>
+              <CardTitle className="text-lg">Instructions</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <p className="text-sm text-gray-700">
+                  <strong>1.</strong> Place your finger gently on the MAX30105 sensor
+                </p>
+                <p className="text-sm text-gray-700">
+                  <strong>2.</strong> Keep your finger still and relaxed
+                </p>
+                <p className="text-sm text-gray-700">
+                  <strong>3.</strong> Wait 3-5 seconds for sensor calibration
+                </p>
+                <p className="text-sm text-gray-700">
+                  <strong>4.</strong> Readings will update automatically every second
+                </p>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <Button 
+                  onClick={handleRefresh} 
+                  variant="outline"
+                  className="flex-1"
+                  disabled={isLoading}
+                >
+                  <RefreshCcw className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
+                  Refresh Connection
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Connection Status Alert */}
+          {isConnected && vitalSigns.heartRate !== null && (
+            <Alert className="mt-6 border-green-200 bg-green-50">
+              <CheckCircle2 className="h-4 w-4 text-green-600" />
+              <AlertDescription className="text-green-900">
+                <strong>Monitoring Active</strong> - Real-time data streaming from ESP32 gateway
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {!isConnected && !isLoading && (
+            <Alert className="mt-6 border-amber-200 bg-amber-50">
+              <AlertCircle className="h-4 w-4 text-amber-600" />
+              <AlertDescription className="text-amber-900">
+                <strong>Connection Lost</strong> - Please check:
+                <ul className="list-disc list-inside mt-2 text-sm">
+                  <li>ESP32 device is powered on</li>
+                  <li>WiFi connection is active</li>
+                  <li>Correct IP address in .env.local</li>
+                  <li>Both devices are on the same network</li>
+                </ul>
+              </AlertDescription>
+            </Alert>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}

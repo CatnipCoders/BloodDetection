@@ -1,0 +1,21 @@
+/AApp_module/node_modules
+
+# production
+/AApp_module/build
+/AApp_module/.next
+# debug
+/blood-group-app/npm-debug.log*
+/blood-group-app/yarn-debug.log*
+/blood-group-app/yarn-error.log*
+/blood-group-app/.pnpm-debug.log*
+
+# env files
+/blood-group-app/.env*
+
+# typescript
+/blood-group-app/*.tsbuildinfo
+/blood-group-app/next-env.d.ts
+
+/fingerprint-main/myenv
+/fingerprint-main/venv
+fingerprint-main/src/__pycache__
