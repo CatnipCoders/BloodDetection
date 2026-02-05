@@ -19,7 +19,7 @@ export default function HomePage() {
           </p>
         </div>
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-6xl mx-auto">
+        <div className="grid md:grid-cols-2 lg:grid-cols-5 gap-6 max-w-7xl mx-auto">
           <Card className="hover:shadow-lg transition-shadow border-blue-100">
             <CardHeader>
               <div className="bg-blue-100 w-12 h-12 rounded-lg flex items-center justify-center mb-3">
@@ -76,6 +76,21 @@ export default function HomePage() {
             <CardContent>
               <Link href="/admin">
                 <Button className="w-full bg-gray-800 hover:bg-gray-900">Admin Access</Button>
+              </Link>
+            </CardContent>
+          </Card>
+
+          <Card className="hover:shadow-lg transition-shadow border-orange-100">
+            <CardHeader>
+              <div className="bg-orange-100 w-12 h-12 rounded-lg flex items-center justify-center mb-3">
+                <Activity className="w-6 h-6 text-orange-600" />
+              </div>
+              <CardTitle className="text-xl">Health Report</CardTitle>
+              <CardDescription>View comprehensive health analysis and recommendations</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Link href="/report">
+                <Button className="w-full bg-orange-600 hover:bg-orange-700">View Report</Button>
               </Link>
             </CardContent>
           </Card>

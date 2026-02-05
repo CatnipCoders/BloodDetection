@@ -162,6 +162,9 @@ export default function ScanPage() {
   const handleSaveResult = () => {
     if (!detectedBloodGroup) return
 
+    // Store blood group in localStorage
+    localStorage.setItem("lastBloodGroup", detectedBloodGroup)
+
     if (existingUserId.trim()) {
       // User provided an ID - update existing record (simulated)
       // In real app, this would update the database
@@ -172,6 +175,23 @@ export default function ScanPage() {
       // No user ID - redirect to registration with blood group pre-filled
       router.push(`/register?bloodGroup=${detectedBloodGroup}`)
     }
+  }
+
+  const handleGenerateReport = () => {
+    if (!detectedBloodGroup) return
+
+    // Store blood group
+    localStorage.setItem("lastBloodGroup", detectedBloodGroup)
+    
+    // Get vitals from localStorage or use defaults
+    const spo2 = localStorage.getItem("lastSpO2") || "98"
+    const heartRate = localStorage.getItem("lastHeartRate") || "75"
+    const userName = existingUserId || localStorage.getItem("userName") || "Patient"
+
+    // Navigate to report
+    router.push(
+      `/report?bloodGroup=${detectedBloodGroup}&spo2=${spo2}&heartRate=${heartRate}&userName=${encodeURIComponent(userName)}`
+    )
   }
 
   return (
@@ -297,12 +317,17 @@ export default function ScanPage() {
                     </AlertDescription>
                   </Alert>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <Button onClick={handleReset} variant="outline" className="w-full bg-transparent">
-                      Scan Again
-                    </Button>
-                    <Button onClick={handleSaveResult} className="w-full bg-green-600 hover:bg-green-700">
-                      {existingUserId ? "Save Result" : "Continue to Registration"}
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <Button onClick={handleReset} variant="outline" className="w-full bg-transparent">
+                        Scan Again
+                      </Button>
+                      <Button onClick={handleSaveResult} className="w-full bg-green-600 hover:bg-green-700">
+                        {existingUserId ? "Save Result" : "Continue to Registration"}
+                      </Button>
+                    </div>
+                    <Button onClick={handleGenerateReport} className="w-full bg-blue-600 hover:bg-blue-700">
+                      Generate Health Report
                     </Button>
                   </div>
                 </div>

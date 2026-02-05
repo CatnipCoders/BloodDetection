@@ -9,32 +9,54 @@ Quick start — backend
 
 1. Create and activate the Python virtual environment and install dependencies:
 
-You can use the bundled helper script (recommended):
+**Recommended: Use the setup script**
 
+```cmd
+cd fingerprint-main
+set.bat
 ```
-.\set.bat
-```
- Start the backend server (after venv is activated):
-
-```
-.\start.bat
 
 The script will:
-- create a virtual environment named `myenv` (if missing)
-- activate it
-- install packages from `requirements.txt`
+- Check for Python installation
+- Create a virtual environment named `myenv`
+- Activate it
+- Upgrade pip
+- Install all packages from `requirements.txt`
 
-If you prefer to do it manually (PowerShell):
+**Test your setup:**
+
+```cmd
+test_setup.bat
+```
+
+This will verify all components are properly installed.
+
+**Manual setup (if script fails):**
 
 ```powershell
+cd fingerprint-main
 python -m venv myenv
-.\myenv\Scripts\Activate.ps1
+myenv\Scripts\activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-3. Start the Frontend server
-  In AApp_module
+**Troubleshooting:**
+
+If you encounter issues, see `fingerprint-main/SETUP_TROUBLESHOOTING.md` for detailed solutions.
+
+2. Start the backend server:
+
+```cmd
+start.bat
+```
+
+Or manually:
+
+```cmd
+myenv\Scripts\activate
+python src\app.py
+```
 
 
 Backend endpoints
@@ -57,6 +79,37 @@ Using npm:
 npm install
 npm run dev
 ```
+
+## Health Report System
+
+The application now includes a comprehensive health report generation system that analyzes vital signs and blood group data to provide:
+
+- **Personalized Health Analysis**: Evaluates SpO2, heart rate, and perfusion index
+- **Critical Alerts**: Automatic warnings for dangerous health conditions
+- **Blood Group Information**: Compatibility, dietary recommendations, and health considerations
+- **Actionable Recommendations**: Specific advice based on your health status
+- **PDF Export**: Professional medical reports you can share with doctors
+
+### Quick Start
+
+1. **Monitor Vitals**: Go to "Vital Signs Monitor" and place finger on ESP32 sensor
+2. **Scan Blood Group**: Go to "Scan Fingerprint" to detect your blood group
+3. **Generate Report**: Click "Generate Health Report" from either page
+4. **Download PDF**: Save your report for medical records
+
+For detailed instructions, see `AApp_module/REPORT_QUICKSTART.md`
+
+### Report Features
+
+- ✅ Real-time vital signs analysis
+- ✅ Severity classification (Normal/Warning/Critical)
+- ✅ Emergency alerts for critical conditions
+- ✅ Blood type-specific dietary advice
+- ✅ Personalized health recommendations
+- ✅ Safety precautions and lifestyle tips
+- ✅ Professional PDF export
+
+See `HEALTH_REPORT_SYSTEM.md` for complete documentation.
 
 Note about PowerShell and package managers
 

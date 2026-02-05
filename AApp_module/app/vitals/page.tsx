@@ -2,10 +2,11 @@
 
 import { useState, useEffect } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { ArrowLeft, Activity, Heart, CheckCircle2, AlertCircle, RefreshCcw, Wifi, WifiOff } from "lucide-react"
+import { ArrowLeft, Activity, Heart, CheckCircle2, AlertCircle, RefreshCcw, Wifi, WifiOff, FileText } from "lucide-react"
 
 interface VitalSigns {
   spo2: number | null
@@ -15,12 +16,14 @@ interface VitalSigns {
 }
 
 export default function VitalsPage() {
+  const router = useRouter()
   const [vitalSigns, setVitalSigns] = useState<VitalSigns>({ spo2: null, heartRate: null })
   const [isConnected, setIsConnected] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
   const [history, setHistory] = useState<VitalSigns[]>([])
+  const [perfusionIndex, setPerfusionIndex] = useState<number>(2.5)
 
   // Fetch vital signs from ESP32 gateway
   useEffect(() => {
@@ -50,10 +53,15 @@ export default function VitalsPage() {
         }
         
         setVitalSigns(newVitals)
+        setPerfusionIndex(data.perfusionIndex ?? 2.5)
         setIsConnected(true)
         setIsLoading(false)
         setError(null)
         setLastUpdate(new Date())
+        
+        // Store in localStorage for report generation
+        if (newVitals.spo2) localStorage.setItem("lastSpO2", newVitals.spo2.toString())
+        if (newVitals.heartRate) localStorage.setItem("lastHeartRate", newVitals.heartRate.toString())
 
         // Add to history (keep last 20 readings)
         setHistory(prev => {
@@ -84,6 +92,22 @@ export default function VitalsPage() {
   const handleRefresh = () => {
     setIsLoading(true)
     setError(null)
+  }
+
+  const handleGenerateReport = () => {
+    if (!vitalSigns.spo2 || !vitalSigns.heartRate) {
+      alert("Please wait for valid vital signs data before generating a report")
+      return
+    }
+
+    // Get blood group from localStorage or prompt user
+    const bloodGroup = localStorage.getItem("lastBloodGroup") || "O+"
+    const userName = localStorage.getItem("userName") || "Patient"
+
+    // Navigate to report page with data
+    router.push(
+      `/report?spo2=${vitalSigns.spo2}&heartRate=${vitalSigns.heartRate}&perfusionIndex=${perfusionIndex}&bloodGroup=${bloodGroup}&userName=${encodeURIComponent(userName)}`
+    )
   }
 
   const getSpO2Status = (spo2: number) => {
@@ -313,6 +337,14 @@ export default function VitalsPage() {
                 >
                   <RefreshCcw className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
                   Refresh Connection
+                </Button>
+                <Button 
+                  onClick={handleGenerateReport}
+                  className="flex-1 bg-green-600 hover:bg-green-700"
+                  disabled={!vitalSigns.spo2 || !vitalSigns.heartRate || !vitalSigns.dataValid}
+                >
+                  <FileText className="w-4 h-4 mr-2" />
+                  Generate Health Report
                 </Button>
               </div>
             </CardContent>

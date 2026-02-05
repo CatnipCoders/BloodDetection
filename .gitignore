@@ -19,3 +19,5 @@
 /fingerprint-main/myenv
 /fingerprint-main/venv
 fingerprint-main/src/__pycache__
+
+.vscode
