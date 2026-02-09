@@ -7,7 +7,7 @@ echo.
 
 cd /d "%~dp0"
 
-echo [1/5] Checking Python installation...
+echo [1/6] Checking Python installation...
 python --version 2>nul
 if errorlevel 1 (
     echo [ERROR] Python is not installed or not in PATH!
@@ -21,7 +21,7 @@ if errorlevel 1 (
 python --version
 echo.
 
-echo [2/5] Creating virtual environment...
+echo [2/6] Creating virtual environment...
 if exist myenv\Scripts\activate.bat (
     echo Virtual environment already exists.
 ) else (
@@ -37,7 +37,7 @@ if exist myenv\Scripts\activate.bat (
 )
 echo.
 
-echo [3/5] Activating virtual environment...
+echo [3/6] Activating virtual environment...
 call myenv\Scripts\activate.bat
 if errorlevel 1 (
     echo [ERROR] Failed to activate!
@@ -47,32 +47,50 @@ if errorlevel 1 (
 echo Activated.
 echo.
 
-echo [4/5] Checking requirements.txt...
-if not exist requirements.txt (
-    echo [ERROR] requirements.txt not found!
-    pause
-    exit /b 1
-)
-echo Found.
+echo [4/6] Upgrading pip...
+python -m pip install --upgrade pip setuptools wheel
 echo.
 
-echo [5/5] Installing dependencies...
+echo [5/6] Installing dependencies...
 echo This may take 2-5 minutes...
 echo.
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+pip install --no-cache-dir -r requirements.txt
 if errorlevel 1 (
     echo.
-    echo [ERROR] Installation failed!
+    echo [WARNING] Some packages failed. Trying alternative installation...
     echo.
-    echo Common fix: Install Visual C++ Redistributable
-    echo https://aka.ms/vs/17/release/vc_redist.x64.exe
-    echo.
-    pause
-    exit /b 1
+    pip install numpy==1.26.4
+    pip install tensorflow-intel==2.15.0
+    pip install Flask Pillow flask-cors requests pandas scikit-learn matplotlib seaborn
+    if errorlevel 1 (
+        echo.
+        echo [ERROR] Installation failed!
+        echo.
+        echo Install Visual C++ Redistributable:
+        echo https://aka.ms/vs/17/release/vc_redist.x64.exe
+        echo.
+        pause
+        exit /b 1
+    )
 )
-
 echo.
+
+echo [6/6] Testing TensorFlow...
+python -c "import tensorflow as tf; print('TensorFlow:', tf.__version__)" 2>nul
+if errorlevel 1 (
+    echo [WARNING] TensorFlow import failed!
+    echo Installing tensorflow-intel...
+    pip install --upgrade tensorflow-intel==2.15.0
+)
+echo.
+
+echo Initializing database...
+python -c "from src.db import init_db; init_db(); print('Database ready')" 2>nul
+if errorlevel 1 (
+    echo [INFO] Database will be initialized on first run
+)
+echo.
+
 echo ========================================
 echo  Setup Complete!
 echo ========================================

@@ -5,6 +5,8 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { ArrowLeft, Activity, Heart, CheckCircle2, AlertCircle, RefreshCcw, Wifi, WifiOff, FileText } from "lucide-react"
 
@@ -24,9 +26,24 @@ export default function VitalsPage() {
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
   const [history, setHistory] = useState<VitalSigns[]>([])
   const [perfusionIndex, setPerfusionIndex] = useState<number>(2.5)
+  
+  // Patient management state
+  const [existingUserId, setExistingUserId] = useState("")
+  const [patientName, setPatientName] = useState("")
+  const [patientEmail, setPatientEmail] = useState("")
+  const [isNewPatient, setIsNewPatient] = useState(false)
+  const [currentPatient, setCurrentPatient] = useState<{ id: number; name: string } | null>(null)
 
   // Fetch vital signs from ESP32 gateway
   useEffect(() => {
+    // Load current patient from localStorage if available
+    const storedUserId = localStorage.getItem("currentUserId")
+    const storedUserName = localStorage.getItem("userName")
+    if (storedUserId && storedUserName) {
+      setCurrentPatient({ id: parseInt(storedUserId), name: storedUserName })
+      setExistingUserId(storedUserId)
+    }
+
     const ESP32_API_URL = process.env.NEXT_PUBLIC_ESP32_API_URL ?? "http://192.168.1.193/api/vitals"
     let intervalId: NodeJS.Timeout
 
@@ -94,19 +111,91 @@ export default function VitalsPage() {
     setError(null)
   }
 
-  const handleGenerateReport = () => {
+  const handleGenerateReport = async () => {
     if (!vitalSigns.spo2 || !vitalSigns.heartRate) {
       alert("Please wait for valid vital signs data before generating a report")
       return
     }
 
+    let userId: number | null = null
+
+    // Handle patient creation or selection
+    if (isNewPatient) {
+      if (!patientName || !patientEmail) {
+        alert("Please enter patient name and email")
+        return
+      }
+
+      // Create new patient
+      try {
+        const { createUser } = await import("@/lib/api-client")
+        const newUser = await createUser({
+          name: patientName,
+          email: patientEmail,
+          blood_group: localStorage.getItem("lastBloodGroup") || "Unknown",
+          confidence: 0.95,
+        })
+
+        if (newUser) {
+          userId = newUser.id
+          localStorage.setItem("currentUserId", userId.toString())
+          localStorage.setItem("userName", newUser.name)
+          setCurrentPatient({ id: userId, name: newUser.name })
+        } else {
+          alert("Failed to create patient. Email may already exist.")
+          return
+        }
+      } catch (error) {
+        console.error("Error creating patient:", error)
+        alert("Error connecting to server")
+        return
+      }
+    } else if (existingUserId.trim()) {
+      // Use existing patient
+      userId = parseInt(existingUserId)
+      
+      // Verify patient exists
+      try {
+        const { getUser } = await import("@/lib/api-client")
+        const user = await getUser(userId)
+        if (!user) {
+          alert("Patient ID not found. Please check the ID.")
+          return
+        }
+        localStorage.setItem("currentUserId", userId.toString())
+        localStorage.setItem("userName", user.name)
+        setCurrentPatient({ id: userId, name: user.name })
+      } catch (error) {
+        console.error("Error fetching patient:", error)
+        alert("Error connecting to server")
+        return
+      }
+    } else {
+      alert("Please select an existing patient or create a new one")
+      return
+    }
+
+    // Save vital signs to backend
+    if (userId) {
+      try {
+        const { addVitalSigns } = await import("@/lib/api-client")
+        await addVitalSigns(userId, {
+          spo2: vitalSigns.spo2,
+          heart_rate: vitalSigns.heartRate,
+          perfusion_index: perfusionIndex,
+        })
+      } catch (error) {
+        console.error("Failed to save vitals to backend:", error)
+      }
+    }
+
     // Get blood group from localStorage or prompt user
     const bloodGroup = localStorage.getItem("lastBloodGroup") || "O+"
-    const userName = localStorage.getItem("userName") || "Patient"
+    const userName = currentPatient?.name || localStorage.getItem("userName") || "Patient"
 
     // Navigate to report page with data
     router.push(
-      `/report?spo2=${vitalSigns.spo2}&heartRate=${vitalSigns.heartRate}&perfusionIndex=${perfusionIndex}&bloodGroup=${bloodGroup}&userName=${encodeURIComponent(userName)}`
+      `/report?spo2=${vitalSigns.spo2}&heartRate=${vitalSigns.heartRate}&perfusionIndex=${perfusionIndex}&bloodGroup=${bloodGroup}&userName=${encodeURIComponent(userName)}${userId ? `&userId=${userId}` : ""}`
     )
   }
 
@@ -172,6 +261,95 @@ export default function VitalsPage() {
               </AlertDescription>
             </Alert>
           )}
+
+          {/* Patient Selection Card */}
+          <Card className="mb-6 border-purple-200 bg-white shadow-lg">
+            <CardHeader>
+              <CardTitle className="text-lg">Patient Information</CardTitle>
+              <CardDescription>Select existing patient or create new patient record</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Button
+                  type="button"
+                  variant={!isNewPatient ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setIsNewPatient(false)}
+                  className="flex-1"
+                >
+                  Existing Patient
+                </Button>
+                <Button
+                  type="button"
+                  variant={isNewPatient ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setIsNewPatient(true)}
+                  className="flex-1"
+                >
+                  New Patient
+                </Button>
+              </div>
+
+              {!isNewPatient ? (
+                <div className="space-y-2">
+                  <Label htmlFor="userId" className="text-sm">
+                    Patient ID
+                  </Label>
+                  <Input
+                    id="userId"
+                    type="number"
+                    placeholder="Enter Patient ID"
+                    value={existingUserId}
+                    onChange={(e) => setExistingUserId(e.target.value)}
+                    className="font-mono"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Enter the patient's ID to save vitals to their record.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="patientName" className="text-sm">
+                      Patient Name *
+                    </Label>
+                    <Input
+                      id="patientName"
+                      placeholder="Enter full name"
+                      value={patientName}
+                      onChange={(e) => setPatientName(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="patientEmail" className="text-sm">
+                      Email Address *
+                    </Label>
+                    <Input
+                      id="patientEmail"
+                      type="email"
+                      placeholder="patient@example.com"
+                      value={patientEmail}
+                      onChange={(e) => setPatientEmail(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    A new patient record will be created when you generate the report.
+                  </p>
+                </div>
+              )}
+
+              {currentPatient && (
+                <Alert className="border-green-200 bg-green-50">
+                  <CheckCircle2 className="h-4 w-4 text-green-600" />
+                  <AlertDescription className="text-green-900">
+                    <strong>Current Patient:</strong> {currentPatient.name} (ID: {currentPatient.id})
+                  </AlertDescription>
+                </Alert>
+              )}
+            </CardContent>
+          </Card>
 
           {/* Loading State */}
           {isLoading && !isConnected && (

@@ -1,0 +1,151 @@
+================================================================================
+                    NON-ESSENTIAL FILES ARCHIVE
+================================================================================
+
+Date Created: February 9, 2026
+Total Files: 41
+Purpose: Clean up project by archiving documentation and troubleshooting files
+
+================================================================================
+                    WHAT'S IN THIS FOLDER
+================================================================================
+
+Documentation (14 files):
+  - README.md
+  - PROJECT_WORKFLOW_README.md
+  - ENHANCED_MODEL_README.md
+  - GPU_TRAINING_GUIDE.md
+  - TRAINING_GUIDE.md
+  - READY_TO_TRAIN.md
+  - README_TRAINING_RESULTS.md
+  - TENSORFLOW_FIX_GUIDE.md
+  - TENSORFLOW_FIXED.md
+  - MODEL_ARCHITECTURE_FIX.md
+  - CACHING_FIX_APPLIED.md
+  - SAME_IMAGE_CACHING_FIX.md
+  - MODEL_DIAGNOSTIC.md
+  - CURRENT_STATUS.md
+
+Quick Start Guides (11 files):
+  - START_HERE.txt
+  - START_HERE_AFTER_TRAINING.txt
+  - START_HERE_CACHING_FIX.txt
+  - START_GPU_TRAINING.txt
+  - TRAIN_NOW.txt
+  - YOU_NEED_TO_RESTART.txt
+  - RESTART_AFTER_ARCHITECTURE_FIX.txt
+  - FINAL_FIX_SUMMARY.txt
+  - FIX_SUMMARY.txt
+  - QUICK_DECISION.txt
+  - LOGGING_FIX_APPLIED.txt
+
+Batch Scripts (10 files):
+  - start.bat
+  - set.bat
+  - fix_tensorflow.bat
+  - run_training.bat
+  - start_training.bat
+  - FORCE_RESTART.bat
+  - RESTART_NOW.bat
+  - RESTART_SERVERS.bat
+  - WHAT_NOW.bat
+
+Test Scripts (2 files):
+  - test_prediction_caching.py
+  - verify_new_code.py
+
+Integration Guides (2 files):
+  - SECUGEN_INTEGRATION_SUMMARY.md
+  - SECUGEN_SETUP_GUIDE.md
+
+Images (2 files):
+  - blood.drawio.png
+  - image.png
+
+Other (1 file):
+  - requirements.txt (backup)
+
+================================================================================
+                    WHY THESE FILES WERE ARCHIVED
+================================================================================
+
+These files were created during development for:
+
+1. Troubleshooting Issues:
+   - TensorFlow installation problems
+   - Model architecture mismatch
+   - Caching issues
+   - Logging configuration
+
+2. Training Documentation:
+   - Multiple training guides
+   - GPU optimization guides
+   - Quick start instructions
+
+3. Status Reports:
+   - Training results analysis
+   - Model diagnostics
+   - Fix summaries
+
+4. Helper Scripts:
+   - Restart scripts
+   - Test scripts
+   - Setup scripts
+
+================================================================================
+                    WHAT REMAINS IN MAIN PROJECT
+================================================================================
+
+fingerprint-main/:
+  ✓ src/app.py (Flask API)
+  ✓ src/db.py (Database)
+  ✓ src/train.py (Training)
+  ✓ dataset/ (Training data)
+  ✓ models/ (Trained models)
+  ✓ myenv/ (Virtual environment)
+  ✓ Essential training scripts
+
+AApp_module/:
+  ✓ app/ (Next.js pages)
+  ✓ components/ (React components)
+  ✓ lib/ (API clients)
+  ✓ public/ (Static assets)
+  ✓ Essential config files
+
+================================================================================
+                    WHEN TO USE THESE FILES
+================================================================================
+
+Refer to this archive when:
+
+1. Setting up on a new machine
+   → Check setup guides and batch scripts
+
+2. Troubleshooting similar issues
+   → Review fix documentation
+
+3. Understanding development history
+   → Read status reports and diagnostics
+
+4. Training new models
+   → Consult training guides
+
+5. Onboarding new developers
+   → Share documentation files
+
+================================================================================
+                    IMPORTANT NOTES
+================================================================================
+
+✓ These files are BACKUPS - originals may still exist in fingerprint-main/
+✓ The main project works WITHOUT these files
+✓ Keep this folder for reference only
+✓ Do NOT delete - useful for troubleshooting
+
+================================================================================
+
+Created by: Kiro AI Assistant
+Purpose: Project cleanup and organization
+Status: Archive complete
+
+================================================================================

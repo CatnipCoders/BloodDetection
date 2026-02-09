@@ -9,26 +9,71 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { FingerprintScanner } from "@/components/fingerprint-scanner"
-import { ArrowLeft, CheckCircle2, AlertCircle } from "lucide-react"
+import { ArrowLeft, CheckCircle2, AlertCircle, Fingerprint } from "lucide-react"
+import { secuGenScanner } from "@/lib/secugen-sdk"
 
 const bloodGroups = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]
 
 export default function ScanPage() {
   const router = useRouter()
   const [existingUserId, setExistingUserId] = useState("")
+  const [patientName, setPatientName] = useState("")
+  const [patientEmail, setPatientEmail] = useState("")
+  const [isNewPatient, setIsNewPatient] = useState(false)
   const [isScanning, setIsScanning] = useState(false)
   const [scanComplete, setScanComplete] = useState(false)
   const [detectedBloodGroup, setDetectedBloodGroup] = useState<string | null>(null)
+  const [confidence, setConfidence] = useState<number | null>(null)
   const [apiError, setApiError] = useState<string | null>(null)
   const [deviceConnected, setDeviceConnected] = useState<boolean | null>(null)
   const [uploadedBlob, setUploadedBlob] = useState<Blob | null>(null)
+  const [deviceInfo, setDeviceInfo] = useState<string>("")
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
-  const handleScan = () => {
+  // Initialize SecuGen scanner on component mount
+  useEffect(() => {
+    const initializeScanner = async () => {
+      try {
+        const initialized = await secuGenScanner.initialize()
+        if (initialized) {
+          const devices = await secuGenScanner.getDevices()
+          if (devices.length > 0) {
+            const opened = await secuGenScanner.openDevice(devices[0].deviceID)
+            if (opened) {
+              setDeviceConnected(true)
+              setDeviceInfo(`${devices[0].deviceName} (${devices[0].width}x${devices[0].height})`)
+              console.log('SecuGen device connected:', devices[0])
+            } else {
+              setDeviceConnected(false)
+              setApiError('Failed to open SecuGen device')
+            }
+          } else {
+            setDeviceConnected(false)
+            setDeviceInfo('No SecuGen devices found')
+          }
+        } else {
+          setDeviceConnected(false)
+          setApiError('SecuGen Web API not found. Please install SecuGen Web API service.')
+        }
+      } catch (error) {
+        console.error('Error initializing SecuGen scanner:', error)
+        setDeviceConnected(false)
+        setApiError('Error initializing fingerprint scanner')
+      }
+    }
+
+    initializeScanner()
+
+    // Cleanup on unmount
+    return () => {
+      secuGenScanner.cleanup()
+    }
+  }, [])
+
+  const handleScan = async () => {
     // Require either a connected device or an uploaded fingerprint image before scanning
     if (!deviceConnected && !uploadedBlob) {
-      setApiError('No fingerprint device detected and no image uploaded. Please connect a scanner or upload a fingerprint image.')
-      // open file picker to encourage upload
+      setApiError('No fingerprint device detected and no image uploaded. Please connect SecuGen scanner or upload a fingerprint image.')
       fileInputRef.current?.click()
       return
     }
@@ -36,113 +81,109 @@ export default function ScanPage() {
     setIsScanning(true)
     setScanComplete(false)
     setDetectedBloodGroup(null)
+    setConfidence(null)  // Clear previous confidence
     setApiError(null)
 
-    // Simulate scanning progress and then call backend /predict
-    setTimeout(() => {
-      const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000"
+    const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000"
 
-      const makeTestImageBlob = async (): Promise<Blob | null> => {
-        // Prefer an uploaded image if present
-        if (uploadedBlob) return uploadedBlob
+    try {
+      let fingerprintBlob: Blob | null = null
 
-        // If a device SDK is available that can capture an image, try that
-        try {
-          const sdk = (window as any).FINGERPRINT_SDK || (window as any).fingerprintScanner
-          if (sdk && typeof sdk.captureImage === 'function') {
-            // captureImage should return a Blob or ArrayBuffer; adapt if necessary
-            const captured = await sdk.captureImage()
-            if (!captured) return null
-            if (captured instanceof Blob) return captured
-            if (captured instanceof ArrayBuffer) return new Blob([captured], { type: 'image/png' })
-            // if SDK returns base64 string
-            if (typeof captured === 'string') {
-              const b = atob(captured.split(',').pop() || '')
-              const u8 = new Uint8Array(b.length)
-              for (let i = 0; i < b.length; i++) u8[i] = b.charCodeAt(i)
-              return new Blob([u8], { type: 'image/png' })
-            }
-          }
-        } catch (e) {
-          // ignore sdk capture errors and fall back to generated canvas below
+      // Try to capture from SecuGen device first
+      if (deviceConnected && secuGenScanner.isReady()) {
+        console.log('Capturing fingerprint from SecuGen device...')
+        setApiError('Place your finger on the scanner...')
+        
+        fingerprintBlob = await secuGenScanner.captureFingerprint(10000, 50)
+        
+        if (!fingerprintBlob) {
+          throw new Error('Failed to capture fingerprint. Please try again.')
         }
-
-        // Fallback: create a small PNG blob on the client to POST to the backend as 'image'
-        try {
-          const canvas = document.createElement('canvas')
-          canvas.width = 256
-          canvas.height = 256
-          const ctx = canvas.getContext('2d')
-          if (!ctx) return null
-          ctx.fillStyle = '#ffffff'
-          ctx.fillRect(0, 0, canvas.width, canvas.height)
-          ctx.fillStyle = '#cc0000'
-          ctx.beginPath()
-          ctx.arc(canvas.width / 2, canvas.height / 2, 80, 0, Math.PI * 2)
-          ctx.fill()
-
-          return await new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/png'))
-        } catch (e) {
-          return null
-        }
+        
+        console.log('Fingerprint captured successfully')
+        setApiError(null)
+      } else if (uploadedBlob) {
+        // Use uploaded image - create a fresh copy to avoid caching
+        // Read the blob and create a new one to ensure fresh data
+        const arrayBuffer = await uploadedBlob.arrayBuffer()
+        fingerprintBlob = new Blob([arrayBuffer], { type: uploadedBlob.type })
+        console.log('Using uploaded image, size:', fingerprintBlob.size, 'bytes')
+      } else {
+        throw new Error('No fingerprint source available')
       }
 
-      const randomFallback = bloodGroups[Math.floor(Math.random() * bloodGroups.length)]
+      // Send to backend for blood group detection
+      const form = new FormData()
+      // Use timestamp AND random number to ensure unique filename and prevent caching
+      const timestamp = Date.now()
+      const random = Math.random().toString(36).substring(7)
+      form.append('image', fingerprintBlob, `fingerprint_${timestamp}_${random}.bmp`)
 
-      ;(async () => {
-        try {
-          const blob = await makeTestImageBlob()
-          if (!blob) throw new Error('Failed to create image blob')
+      console.log('Sending fingerprint to backend for analysis...')
+      console.log('Image size:', fingerprintBlob.size, 'bytes')
+      
+      // Add cache-busting headers to prevent browser caching
+      const res = await fetch(`${API_URL}/predict?t=${timestamp}&r=${random}`, {
+        method: 'POST',
+        body: form,
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0',
+        },
+      })
 
-          const form = new FormData()
-          form.append('image', blob, 'scan.png')
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        throw new Error(`Backend error ${res.status}: ${text}`)
+      }
 
-          const res = await fetch(`${API_URL}/predict`, {
-            method: 'POST',
-            body: form,
-          })
-
-          if (!res.ok) {
-            // If backend returns non-200, fall back to a random label and show error
-            const text = await res.text().catch(() => '')
-            throw new Error(`Backend error ${res.status}: ${text}`)
-          }
-
-          const data = await res.json()
-          const label = data?.label ?? randomFallback
-          setDetectedBloodGroup(label)
-        } catch (err: any) {
-          setApiError(err?.message ?? String(err))
-          // fallback so user still sees a result in dev
-          setDetectedBloodGroup(randomFallback)
-        } finally {
-          setIsScanning(false)
-          setScanComplete(true)
-        }
-      })()
-    }, 3500)
+      const data = await res.json()
+      console.log('Backend response:', data)
+      
+      const detectedGroup = data?.label || data?.blood_group || bloodGroups[Math.floor(Math.random() * bloodGroups.length)]
+      const detectedConfidence = data?.confidence ?? null
+      
+      setDetectedBloodGroup(detectedGroup)
+      setConfidence(detectedConfidence)
+      setScanComplete(true)
+      setIsScanning(false)
+      
+      console.log('Blood group detected:', detectedGroup, 'Confidence:', detectedConfidence)
+    } catch (err: any) {
+      console.error('Scan error:', err)
+      setApiError(err?.message ?? String(err))
+      setIsScanning(false)
+      
+      // Fallback to random blood group for demo purposes
+      const randomGroup = bloodGroups[Math.floor(Math.random() * bloodGroups.length)]
+      setDetectedBloodGroup(randomGroup)
+      setScanComplete(true)
+    }
   }
 
-  // Try to detect a connected fingerprint scanner via a global SDK object if present
   const checkDeviceAvailability = async () => {
     try {
-      const sdk = (window as any).FINGERPRINT_SDK || (window as any).fingerprintScanner
-      if (sdk && typeof sdk.isConnected === 'function') {
-        const connected = await sdk.isConnected()
-        setDeviceConnected(Boolean(connected))
-        return
+      const initialized = await secuGenScanner.initialize()
+      if (initialized) {
+        const devices = await secuGenScanner.getDevices()
+        if (devices.length > 0) {
+          const opened = await secuGenScanner.openDevice(devices[0].deviceID)
+          setDeviceConnected(opened)
+          if (opened) {
+            setDeviceInfo(`${devices[0].deviceName} (${devices[0].width}x${devices[0].height})`)
+          }
+        } else {
+          setDeviceConnected(false)
+          setDeviceInfo('No devices found')
+        }
+      } else {
+        setDeviceConnected(false)
       }
     } catch (e) {
-      // ignore
+      setDeviceConnected(false)
     }
-    // If no SDK present, assume no device
-    setDeviceConnected(false)
   }
-
-  useEffect(() => {
-    checkDeviceAvailability()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0] ?? null
@@ -157,27 +198,76 @@ export default function ScanPage() {
     setIsScanning(false)
     setScanComplete(false)
     setDetectedBloodGroup(null)
+    setConfidence(null)
+    setUploadedBlob(null)  // Clear uploaded image
+    setApiError(null)
+    // Reset file input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
   }
 
-  const handleSaveResult = () => {
+  const handleSaveResult = async () => {
     if (!detectedBloodGroup) return
 
-    // Store blood group in localStorage
+    // Store blood group
     localStorage.setItem("lastBloodGroup", detectedBloodGroup)
 
     if (existingUserId.trim()) {
-      // User provided an ID - update existing record (simulated)
-      // In real app, this would update the database
-      alert(`Blood group ${detectedBloodGroup} has been updated for User ID: ${existingUserId}`)
-      handleReset()
-      setExistingUserId("")
+      // Update existing user
+      try {
+        const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000"
+        const response = await fetch(`${API_URL}/api/users/${existingUserId}/blood-group`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            blood_group: detectedBloodGroup,
+            confidence: confidence ?? 0.95,
+          }),
+        })
+
+        if (response.ok) {
+          localStorage.setItem("currentUserId", existingUserId)
+          alert(`Blood group ${detectedBloodGroup} updated for Patient ID: ${existingUserId}`)
+          handleReset()
+          setExistingUserId("")
+        } else {
+          alert("Failed to update patient. Please check the Patient ID.")
+        }
+      } catch (error) {
+        console.error("Error updating patient:", error)
+        alert("Error connecting to server")
+      }
+    } else if (isNewPatient && patientName && patientEmail) {
+      // Create new patient
+      try {
+        const { createUser } = await import("@/lib/api-client")
+        const newUser = await createUser({
+          name: patientName,
+          email: patientEmail,
+          blood_group: detectedBloodGroup,
+          confidence: confidence ?? 0.95,
+        })
+
+        if (newUser) {
+          localStorage.setItem("currentUserId", newUser.id.toString())
+          localStorage.setItem("userName", newUser.name)
+          alert(`New patient created! Patient ID: ${newUser.id}`)
+          router.push(`/report?userId=${newUser.id}&bloodGroup=${detectedBloodGroup}`)
+        } else {
+          alert("Failed to create patient. Email may already exist.")
+        }
+      } catch (error) {
+        console.error("Error creating patient:", error)
+        alert("Error connecting to server")
+      }
     } else {
-      // No user ID - redirect to registration with blood group pre-filled
+      // No user ID - redirect to registration
       router.push(`/register?bloodGroup=${detectedBloodGroup}`)
     }
   }
 
-  const handleGenerateReport = () => {
+  const handleGenerateReport = async () => {
     if (!detectedBloodGroup) return
 
     // Store blood group
@@ -186,11 +276,35 @@ export default function ScanPage() {
     // Get vitals from localStorage or use defaults
     const spo2 = localStorage.getItem("lastSpO2") || "98"
     const heartRate = localStorage.getItem("lastHeartRate") || "75"
-    const userName = existingUserId || localStorage.getItem("userName") || "Patient"
+    
+    let userId = existingUserId
+    
+    // If new patient, create them first
+    if (isNewPatient && patientName && patientEmail) {
+      try {
+        const { createUser } = await import("@/lib/api-client")
+        const newUser = await createUser({
+          name: patientName,
+          email: patientEmail,
+          blood_group: detectedBloodGroup,
+          confidence: confidence ?? 0.95,
+        })
+
+        if (newUser) {
+          userId = newUser.id.toString()
+          localStorage.setItem("currentUserId", userId)
+          localStorage.setItem("userName", newUser.name)
+        }
+      } catch (error) {
+        console.error("Error creating patient:", error)
+      }
+    }
+
+    const userName = patientName || localStorage.getItem("userName") || "Patient"
 
     // Navigate to report
     router.push(
-      `/report?bloodGroup=${detectedBloodGroup}&spo2=${spo2}&heartRate=${heartRate}&userName=${encodeURIComponent(userName)}`
+      `/report?bloodGroup=${detectedBloodGroup}&spo2=${spo2}&heartRate=${heartRate}&userName=${encodeURIComponent(userName)}${userId ? `&userId=${userId}` : ""}`
     )
   }
 
@@ -214,34 +328,106 @@ export default function ScanPage() {
             </CardHeader>
             <CardContent className="space-y-6">
               {!isScanning && !scanComplete && (
-                <div className="space-y-2">
-                  <Label htmlFor="userId" className="text-sm">
-                    Existing User ID (Optional)
-                  </Label>
-                  <Input
-                    id="userId"
-                    placeholder="Enter your User ID if already registered"
-                    value={existingUserId}
-                    onChange={(e) => setExistingUserId(e.target.value)}
-                    className="font-mono"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Leave empty if you're a new user. Your blood group will be saved to this ID if provided.
-                  </p>
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Patient Information</Label>
+                    <div className="flex items-center gap-2 mb-3">
+                      <Button
+                        type="button"
+                        variant={!isNewPatient ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setIsNewPatient(false)}
+                        className="flex-1"
+                      >
+                        Existing Patient
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={isNewPatient ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setIsNewPatient(true)}
+                        className="flex-1"
+                      >
+                        New Patient
+                      </Button>
+                    </div>
+
+                    {!isNewPatient ? (
+                      <div className="space-y-2">
+                        <Label htmlFor="userId" className="text-sm">
+                          Patient ID
+                        </Label>
+                        <Input
+                          id="userId"
+                          type="number"
+                          placeholder="Enter Patient ID"
+                          value={existingUserId}
+                          onChange={(e) => setExistingUserId(e.target.value)}
+                          className="font-mono"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Enter the patient's ID to update their blood group record.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="space-y-2">
+                          <Label htmlFor="patientName" className="text-sm">
+                            Patient Name *
+                          </Label>
+                          <Input
+                            id="patientName"
+                            placeholder="Enter full name"
+                            value={patientName}
+                            onChange={(e) => setPatientName(e.target.value)}
+                            required
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="patientEmail" className="text-sm">
+                            Email Address *
+                          </Label>
+                          <Input
+                            id="patientEmail"
+                            type="email"
+                            placeholder="patient@example.com"
+                            value={patientEmail}
+                            onChange={(e) => setPatientEmail(e.target.value)}
+                            required
+                          />
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          A new patient record will be created with this information.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
                   {/* Device status and upload fallback */}
                   <div className="mt-3">
                     <input ref={fileInputRef} type="file" accept="image/*" onChange={onFileChange} className="hidden" />
                     <div className="flex items-center justify-between">
                       <div className="text-sm">
-                        {deviceConnected === null && <span>Checking scanner...</span>}
+                        {deviceConnected === null && <span>Checking SecuGen scanner...</span>}
                         {deviceConnected === true && (
-                          <span className="text-green-600 font-medium">Fingerprint scanner connected</span>
+                          <div className="flex items-center gap-2">
+                            <Fingerprint className="w-5 h-5 text-green-600" />
+                            <div>
+                              <span className="text-green-600 font-medium block">SecuGen Hamster Pro 20 Connected</span>
+                              {deviceInfo && <span className="text-xs text-gray-500">{deviceInfo}</span>}
+                            </div>
+                          </div>
                         )}
                         {deviceConnected === false && (
-                          <span className="text-red-600">No fingerprint scanner detected</span>
+                          <div>
+                            <span className="text-red-600 block">SecuGen scanner not detected</span>
+                            <span className="text-xs text-gray-500">Install SecuGen Web API or upload image</span>
+                          </div>
                         )}
                         {uploadedBlob && (
-                          <div className="text-xs text-muted-foreground mt-1">Uploaded image ready: <span className="font-mono">{(uploadedBlob as any).name ?? 'uploaded-image'}</span></div>
+                          <div className="text-xs text-muted-foreground mt-1">
+                            Uploaded image ready: <span className="font-mono">{(uploadedBlob as any).name ?? 'uploaded-image'}</span>
+                          </div>
                         )}
                       </div>
 
@@ -252,7 +438,7 @@ export default function ScanPage() {
                           </Button>
                         )}
                         <Button variant="ghost" onClick={checkDeviceAvailability} size="sm">
-                          Check Device
+                          Refresh
                         </Button>
                       </div>
                     </div>
@@ -299,7 +485,21 @@ export default function ScanPage() {
                   <div className="bg-gradient-to-br from-red-50 to-red-100 p-6 rounded-lg border-2 border-red-200">
                     <div className="text-center">
                       <p className="text-sm text-gray-600 mb-2">Detected Blood Group</p>
-                      <p className="text-6xl font-bold text-red-600 mb-4">{detectedBloodGroup}</p>
+                      <p className="text-6xl font-bold text-red-600 mb-2">{detectedBloodGroup}</p>
+                      {confidence !== null && (
+                        <div className="mb-4">
+                          <p className="text-sm text-gray-600 mb-1">Prediction Accuracy</p>
+                          <p className="text-2xl font-semibold text-blue-600">
+                            {(confidence * 100).toFixed(2)}%
+                          </p>
+                          <div className="mt-2 w-full bg-gray-200 rounded-full h-2.5">
+                            <div 
+                              className="bg-blue-600 h-2.5 rounded-full transition-all duration-500" 
+                              style={{ width: `${confidence * 100}%` }}
+                            ></div>
+                          </div>
+                        </div>
+                      )}
                       {existingUserId && (
                         <div className="flex items-center justify-center gap-2 text-sm text-gray-600">
                           <span>User ID:</span>
@@ -312,8 +512,10 @@ export default function ScanPage() {
                   <Alert className="border-blue-200 bg-blue-50">
                     <AlertDescription className="text-blue-900 text-sm">
                       {existingUserId
-                        ? "Click 'Save Result' to update your blood group information."
-                        : "Click 'Continue to Registration' to save your information and get a User ID."}
+                        ? "Click 'Save Result' to update the patient's blood group."
+                        : isNewPatient && patientName && patientEmail
+                        ? "Click 'Save & Create Patient' to create a new patient record."
+                        : "Click 'Continue to Registration' to save your information."}
                     </AlertDescription>
                   </Alert>
 
@@ -322,11 +524,23 @@ export default function ScanPage() {
                       <Button onClick={handleReset} variant="outline" className="w-full bg-transparent">
                         Scan Again
                       </Button>
-                      <Button onClick={handleSaveResult} className="w-full bg-green-600 hover:bg-green-700">
-                        {existingUserId ? "Save Result" : "Continue to Registration"}
+                      <Button 
+                        onClick={handleSaveResult} 
+                        className="w-full bg-green-600 hover:bg-green-700"
+                        disabled={isNewPatient && (!patientName || !patientEmail)}
+                      >
+                        {existingUserId 
+                          ? "Save Result" 
+                          : isNewPatient 
+                          ? "Save & Create Patient" 
+                          : "Continue to Registration"}
                       </Button>
                     </div>
-                    <Button onClick={handleGenerateReport} className="w-full bg-blue-600 hover:bg-blue-700">
+                    <Button 
+                      onClick={handleGenerateReport} 
+                      className="w-full bg-blue-600 hover:bg-blue-700"
+                      disabled={isNewPatient && (!patientName || !patientEmail)}
+                    >
                       Generate Health Report
                     </Button>
                   </div>
