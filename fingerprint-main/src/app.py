@@ -15,7 +15,6 @@ import os
 import io
 import json
 import glob
-import time
 from flask import Flask, request, jsonify
 from PIL import Image
 import numpy as np
@@ -60,7 +59,7 @@ def load_model_safe(path):
     try:
         from tensorflow import keras
         from tensorflow.keras.models import load_model
-        from tensorflow.keras.applications import EfficientNetB3
+        from tensorflow.keras.applications import ResNet50
         import h5py
         import tensorflow as tf
     except Exception as e:
@@ -100,21 +99,39 @@ def load_model_safe(path):
             
         app.logger.info(f"Attempting to load model from: {candidate}")
         
-        # Strategy 1: Try direct load_model (works for .keras files and properly saved .h5)
+        # Strategy 1: Try loading weights into a fresh ResNet50 architecture
         try:
-            app.logger.info(f"Strategy 1: Direct load_model with compile=False")
-            model = load_model(candidate, compile=False)
+            app.logger.info(f"Strategy 1: Loading weights into fresh ResNet50 architecture")
             
-            # Recompile with categorical crossentropy (our training uses this)
+            # Create a fresh ResNet50 model with custom top layers
+            base_model = ResNet50(weights=None, include_top=False, input_shape=(256, 256, 3))
+            x = base_model.output
+            x = keras.layers.GlobalAveragePooling2D()(x)
+            x = keras.layers.Dense(512, activation='relu')(x)
+            x = keras.layers.Dropout(0.5)(x)
+            x = keras.layers.Dense(256, activation='relu')(x)
+            x = keras.layers.Dropout(0.3)(x)
+            predictions = keras.layers.Dense(8, activation='softmax')(x)
+            
+            model = keras.Model(inputs=base_model.input, outputs=predictions)
+            
+            # Try to load weights from the old model
+            try:
+                model.load_weights(candidate, by_name=True, skip_mismatch=True)
+                app.logger.info(f"Loaded weights with skip_mismatch=True")
+            except:
+                # If that fails, try loading all weights
+                model.load_weights(candidate)
+                app.logger.info(f"Loaded all weights")
+            
+            # Compile model
             model.compile(
                 optimizer='adam',
-                loss='categorical_crossentropy',  # Changed from sparse
+                loss='sparse_categorical_crossentropy',
                 metrics=['accuracy']
             )
             
             app.logger.info(f"Successfully loaded model from: {candidate}")
-            app.logger.info(f"Model input shape: {model.input_shape}")
-            app.logger.info(f"Model output shape: {model.output_shape}")
             return model
             
         except Exception as e:
@@ -122,56 +139,17 @@ def load_model_safe(path):
             app.logger.warning(f"Strategy 1 failed for {candidate}: {error_str}")
             last_error = e
         
-        # Strategy 2: Try loading weights into EfficientNetB3 architecture (matches training)
+        # Strategy 2: Try direct load_model with compile=False
         try:
-            app.logger.info(f"Strategy 2: Loading weights into EfficientNetB3 architecture")
-            
-            # Create EfficientNetB3 model matching training architecture
-            # Training used 224x224 images
-            base_model = EfficientNetB3(
-                weights=None,  # Don't load ImageNet weights
-                include_top=False,
-                input_shape=(224, 224, 3),  # Match training size
-                pooling='avg'
-            )
-            
-            # Build custom head matching training architecture
-            inputs = keras.layers.Input(shape=(224, 224, 3))
-            x = base_model(inputs, training=False)
-            
-            # Match the training architecture
-            x = keras.layers.BatchNormalization()(x)
-            x = keras.layers.Dense(512, kernel_regularizer=keras.regularizers.l2(0.01))(x)
-            x = keras.layers.Activation('relu')(x)
-            x = keras.layers.Dropout(0.5)(x)
-            
-            x = keras.layers.Dense(256, kernel_regularizer=keras.regularizers.l2(0.01))(x)
-            x = keras.layers.Activation('relu')(x)
-            x = keras.layers.Dropout(0.3)(x)
-            
-            x = keras.layers.Dense(128, kernel_regularizer=keras.regularizers.l2(0.01))(x)
-            x = keras.layers.Activation('relu')(x)
-            x = keras.layers.Dropout(0.2)(x)
-            
-            outputs = keras.layers.Dense(8, activation='softmax')(x)
-            
-            model = keras.Model(inputs, outputs, name='blood_group_efficientnetb3')
-            
-            # Try to load weights
-            model.load_weights(candidate)
-            
-            # Compile model
+            app.logger.info(f"Strategy 2: Direct load_model")
+            model = load_model(candidate, compile=False)
             model.compile(
                 optimizer='adam',
-                loss='categorical_crossentropy',
+                loss='sparse_categorical_crossentropy',
                 metrics=['accuracy']
             )
-            
             app.logger.info(f"Successfully loaded model from: {candidate}")
-            app.logger.info(f"Model input shape: {model.input_shape}")
-            app.logger.info(f"Model output shape: {model.output_shape}")
             return model
-            
         except Exception as e:
             error_str = str(e)
             app.logger.warning(f"Strategy 2 failed for {candidate}: {error_str}")
@@ -186,44 +164,20 @@ def load_model_safe(path):
     raise FileNotFoundError(error_msg)
 
 
-def preprocess_image(file_stream, target_size=(224, 224)):
-    """Preprocess image for model prediction.
-    
-    IMPORTANT: This must match the training preprocessing exactly!
-    - Training used EfficientNetB3 with 224x224 images
-    - Training used efficientnet.preprocess_input
-    
-    Args:
-        file_stream: Raw bytes of the image file
-        target_size: Target size for resizing (width, height) - MUST be (224, 224)
-    
-    Returns:
-        Preprocessed numpy array ready for model prediction
-    """
-    # Create fresh BytesIO object to ensure clean read
-    image_bytes = io.BytesIO(file_stream)
-    
-    # Read image from stream and convert to RGB
-    image = Image.open(image_bytes).convert('RGB')
-    
-    # Resize to target size (224x224 to match training)
-    image = image.resize(target_size, Image.Resampling.LANCZOS)
-    
-    # Convert to numpy array with explicit copy to avoid any reference issues
-    arr = np.array(image, dtype='float32').copy()
-    
-    # CRITICAL: Use EfficientNet preprocessing (matches training)
+def preprocess_image(file_stream, target_size=(256, 256)):
+    # Read image from stream and convert to array expected by the model
+    image = Image.open(io.BytesIO(file_stream)).convert('RGB')
+    image = image.resize(target_size)
+    arr = np.array(image).astype('float32')
+    # scale to [0,255] then use preprocess_input if available
     try:
-        from tensorflow.keras.applications.efficientnet import preprocess_input
-        # EfficientNet preprocessing: scales to [-1, 1]
+        from tensorflow.keras.applications.imagenet_utils import preprocess_input
         arr = preprocess_input(arr)
     except Exception:
-        # Fallback: normalize to [0,1] then scale to [-1, 1]
-        arr = arr / 127.5 - 1.0
-    
-    # Add batch dimension
+        # fallback: normalize to [0,1]
+        arr = arr / 255.0
+
     arr = np.expand_dims(arr, axis=0)
-    
     return arr
 
 
@@ -249,35 +203,40 @@ def index():
 
 @app.route('/api/users', methods=['POST'])
 def register_user():
-    """Create a new user with their blood group and return the created user object."""
+    """Create a new user with custom ID and return the created user object."""
     data = request.get_json()
-    if not data or not all(k in data for k in ('name', 'email', 'blood_group')):
-        return jsonify({'error': 'Missing required fields: name, email, blood_group'}), 400
+    required_fields = ['user_id', 'name', 'email']
+    if not data or not all(k in data for k in required_fields):
+        return jsonify({'error': f'Missing required fields: {", ".join(required_fields)}'}), 400
         
     try:
         user_id = create_user(
+            user_id=data['user_id'],
             name=data['name'],
             email=data['email'],
-            blood_group=data['blood_group'],
-            confidence=data.get('confidence')
+            phone=data.get('phone'),
+            age=data.get('age'),
+            gender=data.get('gender')
         )
-        # Fetch the created user and return it so clients can immediately display it
+        # Fetch the created user and return it
         user = get_user(user_id)
         if not user:
             return jsonify({'error': 'Failed to retrieve created user'}), 500
         return jsonify(user), 201
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/users/<int:user_id>', methods=['GET'])
+@app.route('/api/users/<user_id>', methods=['GET'])
 def get_user_details(user_id):
-    """Get user details by ID."""
+    """Get user details by custom user_id."""
     user = get_user(user_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
     return jsonify(user)
 
-@app.route('/api/users/<int:user_id>/blood-group', methods=['PUT'])
+@app.route('/api/users/<user_id>/blood-group', methods=['PUT'])
 def update_blood_group(user_id):
     """Update a user's blood group."""
     data = request.get_json()
@@ -294,7 +253,7 @@ def update_blood_group(user_id):
         return jsonify({'error': 'User not found'}), 404
     return jsonify({'status': 'updated'})
 
-@app.route('/api/users/<int:user_id>/vitals', methods=['POST'])
+@app.route('/api/users/<user_id>/vitals', methods=['POST'])
 def add_user_vitals(user_id):
     """Add vital signs for a user."""
     data = request.get_json()
@@ -317,7 +276,7 @@ def add_user_vitals(user_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/users/<int:user_id>/vitals', methods=['GET'])
+@app.route('/api/users/<user_id>/vitals', methods=['GET'])
 def get_user_vitals(user_id):
     """Get vital signs history for a user."""
     user = get_user(user_id)
@@ -333,7 +292,7 @@ def get_user_vitals(user_id):
         'history': vitals
     })
 
-@app.route('/api/users/<int:user_id>/reports', methods=['POST'])
+@app.route('/api/users/<user_id>/reports', methods=['POST'])
 def save_user_report(user_id):
     """Save a health report for a user."""
     data = request.get_json()
@@ -351,7 +310,7 @@ def save_user_report(user_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/users/<int:user_id>/reports', methods=['GET'])
+@app.route('/api/users/<user_id>/reports', methods=['GET'])
 def get_user_reports_list(user_id):
     """Get health reports for a user."""
     user = get_user(user_id)
@@ -363,7 +322,7 @@ def get_user_reports_list(user_id):
     
     return jsonify(reports)
 
-@app.route('/api/users/<int:user_id>/complete', methods=['GET'])
+@app.route('/api/users/<user_id>/complete', methods=['GET'])
 def get_user_complete(user_id):
     """Get complete user data including vitals and reports."""
     user_data = get_user_complete_data(user_id)
@@ -372,7 +331,7 @@ def get_user_complete(user_id):
     
     return jsonify(user_data)
 
-@app.route('/api/users/<int:user_id>/history', methods=['GET'])
+@app.route('/api/users/<user_id>/history', methods=['GET'])
 def user_history(user_id):
     """Get scan history for a user."""
     if not get_user(user_id):
@@ -400,65 +359,36 @@ def favicon():
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    # Generate unique computation ID to prove we're not caching
-    import uuid
-    import random
-    computation_id = str(uuid.uuid4())[:8]
-    request_time = time.time()
-    
     # Basic checks
     if 'image' not in request.files:
         return jsonify({'error': "Missing 'image' file in request"}), 400
 
     img_file = request.files['image']
-    
-    # Read file bytes - ensure we get fresh data
     file_bytes = img_file.read()
-    
-    # Calculate hash to verify we're getting different images
-    import hashlib
-    file_hash = hashlib.md5(file_bytes).hexdigest()[:8]
-    
-    # Log file info for debugging with unique computation ID
-    app.logger.info(f"[COMPUTATION-{computation_id}] NEW REQUEST at {request_time}")
-    app.logger.info(f"[COMPUTATION-{computation_id}] Received image: {img_file.filename}, size: {len(file_bytes)} bytes, hash: {file_hash}")
 
     try:
-        preprocess_start = time.time()
         arr = preprocess_image(file_bytes)
-        preprocess_time = time.time() - preprocess_start
-        app.logger.info(f"[COMPUTATION-{computation_id}] Preprocessed image shape: {arr.shape}, dtype: {arr.dtype} in {preprocess_time:.3f}s")
-        app.logger.info(f"[COMPUTATION-{computation_id}] Image stats - min: {arr.min():.3f}, max: {arr.max():.3f}, mean: {arr.mean():.3f}, std: {arr.std():.3f}")
     except Exception as e:
-        app.logger.error(f"[COMPUTATION-{computation_id}] Image preprocessing error: {e}")
+        app.logger.error(f"Image preprocessing error: {e}")
         return jsonify({'error': f'Error preprocessing image: {str(e)}'}), 400
 
     try:
         # load model lazily and cache on the app object
         if not hasattr(app, 'model'):
-            app.logger.info(f"[COMPUTATION-{computation_id}] Loading model for the first time...")
+            app.logger.info("Loading model for the first time...")
             app.model = load_model_safe(MODEL_PATH)
-            app.logger.info(f"[COMPUTATION-{computation_id}] Model loaded successfully")
+            app.logger.info("Model loaded successfully")
     except Exception as e:
-        app.logger.error(f"[COMPUTATION-{computation_id}] Model loading error: {e}")
+        app.logger.error(f"Model loading error: {e}")
         return jsonify({'error': f'Model loading failed: {str(e)}'}), 500
 
-    # Run prediction - Force fresh computation each time
+    # Run prediction
     try:
-        app.logger.info(f"[COMPUTATION-{computation_id}] STARTING FRESH PREDICTION for image hash: {file_hash}...")
-        
-        prediction_start = time.time()
-        
-        # Use model.predict with explicit settings
-        # run_eagerly=True forces immediate execution without graph caching
-        preds = app.model.predict(arr, batch_size=1, verbose=0)
-        
-        prediction_time = time.time() - prediction_start
-        
-        app.logger.info(f"[COMPUTATION-{computation_id}] Prediction complete in {prediction_time:.3f}s. Shape: {preds.shape}")
-        app.logger.info(f"[COMPUTATION-{computation_id}] Raw predictions: {preds[0]}")
+        app.logger.info("Running prediction...")
+        preds = app.model.predict(arr, verbose=0)
+        app.logger.info(f"Prediction complete. Shape: {preds.shape}")
     except Exception as e:
-        app.logger.error(f"[COMPUTATION-{computation_id}] Prediction error: {e}")
+        app.logger.error(f"Prediction error: {e}")
         return jsonify({'error': f'Error during model.predict: {str(e)}'}), 500
 
     predicted_index = int(np.argmax(preds, axis=1)[0])
@@ -476,17 +406,8 @@ def predict():
     else:
         label = labels[predicted_index]
 
-    total_time = time.time() - request_time
-    app.logger.info(f"[COMPUTATION-{computation_id}] FINAL RESULT: {label} (index: {predicted_index}, confidence: {confidence:.4f}) for hash: {file_hash}")
-    app.logger.info(f"[COMPUTATION-{computation_id}] TOTAL COMPUTATION TIME: {total_time:.3f}s")
-    app.logger.info(f"[COMPUTATION-{computation_id}] REQUEST COMPLETE\n")
-    
-    return jsonify({
-        'label': label, 
-        'confidence': confidence,
-        'computation_id': computation_id,
-        'computation_time': round(total_time, 3)
-    }), 200
+    app.logger.info(f"Prediction result: {label} (confidence: {confidence:.2f})")
+    return jsonify({'label': label, 'confidence': confidence}), 200
 
 
 if __name__ == '__main__':

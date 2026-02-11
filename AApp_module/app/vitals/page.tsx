@@ -8,42 +8,57 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { ArrowLeft, Activity, Heart, CheckCircle2, AlertCircle, RefreshCcw, Wifi, WifiOff, FileText } from "lucide-react"
+import { ArrowLeft, Activity, Heart, CheckCircle2, AlertCircle, RefreshCcw, Wifi, WifiOff, User as UserIcon } from "lucide-react"
+import { getUser, addVitalSigns } from "@/lib/api-client"
 
 interface VitalSigns {
   spo2: number | null
   heartRate: number | null
+  perfusionIndex?: number | null
   fingerDetected?: boolean
   dataValid?: boolean
 }
 
 export default function VitalsPage() {
   const router = useRouter()
+  
+  // User ID input
+  const [userId, setUserId] = useState("")
+  const [userVerified, setUserVerified] = useState(false)
+  const [userName, setUserName] = useState("")
+  
+  // Vital signs state
   const [vitalSigns, setVitalSigns] = useState<VitalSigns>({ spo2: null, heartRate: null })
   const [isConnected, setIsConnected] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
-  const [history, setHistory] = useState<VitalSigns[]>([])
-  const [perfusionIndex, setPerfusionIndex] = useState<number>(2.5)
-  
-  // Patient management state
-  const [existingUserId, setExistingUserId] = useState("")
-  const [patientName, setPatientName] = useState("")
-  const [patientEmail, setPatientEmail] = useState("")
-  const [isNewPatient, setIsNewPatient] = useState(false)
-  const [currentPatient, setCurrentPatient] = useState<{ id: number; name: string } | null>(null)
+  const [perfusionIndex, setPerfusionIndex] = useState<number | null>(null)
+  const [saveSuccess, setSaveSuccess] = useState(false)
 
-  // Fetch vital signs from ESP32 gateway
-  useEffect(() => {
-    // Load current patient from localStorage if available
-    const storedUserId = localStorage.getItem("currentUserId")
-    const storedUserName = localStorage.getItem("userName")
-    if (storedUserId && storedUserName) {
-      setCurrentPatient({ id: parseInt(storedUserId), name: storedUserName })
-      setExistingUserId(storedUserId)
+  // Verify user ID
+  const handleVerifyUser = async () => {
+    if (!userId.trim()) {
+      setError("Please enter your Patient ID")
+      return
     }
 
+    try {
+      const user = await getUser(userId)
+      if (user) {
+        setUserVerified(true)
+        setUserName(user.name)
+        setError(null)
+      } else {
+        setError("Patient ID not found. Please check your ID or register first.")
+      }
+    } catch (error) {
+      setError("Error verifying Patient ID")
+    }
+  }
+
+  // Fetch vital signs from ESP32
+  useEffect(() => {
     const ESP32_API_URL = process.env.NEXT_PUBLIC_ESP32_API_URL ?? "http://192.168.1.193/api/vitals"
     let intervalId: NodeJS.Timeout
 
@@ -51,9 +66,7 @@ export default function VitalsPage() {
       try {
         const response = await fetch(ESP32_API_URL, {
           method: 'GET',
-          headers: {
-            'Accept': 'application/json',
-          },
+          headers: { 'Accept': 'application/json' },
           mode: 'cors',
         })
 
@@ -65,26 +78,17 @@ export default function VitalsPage() {
         const newVitals = {
           spo2: data.spo2 ?? data.SpO2 ?? null,
           heartRate: data.heartRate ?? data.heart_rate ?? data.bpm ?? null,
+          perfusionIndex: data.perfusionIndex ?? null,
           fingerDetected: data.fingerDetected ?? undefined,
           dataValid: data.dataValid ?? undefined
         }
         
         setVitalSigns(newVitals)
-        setPerfusionIndex(data.perfusionIndex ?? 2.5)
+        setPerfusionIndex(data.perfusionIndex ?? null)
         setIsConnected(true)
         setIsLoading(false)
         setError(null)
         setLastUpdate(new Date())
-        
-        // Store in localStorage for report generation
-        if (newVitals.spo2) localStorage.setItem("lastSpO2", newVitals.spo2.toString())
-        if (newVitals.heartRate) localStorage.setItem("lastHeartRate", newVitals.heartRate.toString())
-
-        // Add to history (keep last 20 readings)
-        setHistory(prev => {
-          const updated = [...prev, newVitals]
-          return updated.slice(-20)
-        })
       } catch (error: any) {
         console.error('Failed to fetch vital signs from ESP32:', error)
         setIsConnected(false)
@@ -96,161 +100,67 @@ export default function VitalsPage() {
     // Initial fetch
     fetchVitalSigns()
 
-    // Poll every 100ms for instant real-time updates
-    intervalId = setInterval(fetchVitalSigns, 100)
+    // Poll every 2 seconds
+    intervalId = setInterval(fetchVitalSigns, 2000)
 
-    return () => {
-      if (intervalId) {
-        clearInterval(intervalId)
-      }
-    }
+    return () => clearInterval(intervalId)
   }, [])
 
-  const handleRefresh = () => {
-    setIsLoading(true)
-    setError(null)
-  }
+  const handleSaveVitals = async () => {
+    if (!userVerified || !userId) {
+      setError("Please verify your Patient ID first")
+      return
+    }
 
-  const handleGenerateReport = async () => {
-    // Check if data is valid and stable
     if (!vitalSigns.spo2 || !vitalSigns.heartRate) {
-      alert("Please wait for valid vital signs data before generating a report")
+      setError("No valid vital signs to save. Please ensure finger is on sensor.")
       return
     }
 
-    if (!vitalSigns.dataValid) {
-      alert("Sensor is still calibrating. Please wait for stable readings (green 'Valid' status)")
-      return
-    }
-
-    if (!vitalSigns.fingerDetected) {
-      alert("No finger detected. Please place your finger on the sensor")
-      return
-    }
-
-    // Wait for stable readings (collect 10 readings over 1 second)
-    const stableReadings: VitalSigns[] = []
-    const stabilizationAlert = alert("Collecting stable readings... Please keep your finger still")
-    
     try {
-      // Collect readings for 1 second
-      for (let i = 0; i < 10; i++) {
-        await new Promise(resolve => setTimeout(resolve, 100))
-        if (vitalSigns.spo2 && vitalSigns.heartRate && vitalSigns.dataValid) {
-          stableReadings.push({ ...vitalSigns })
-        }
-      }
+      const success = await addVitalSigns(userId, {
+        spo2: vitalSigns.spo2,
+        heart_rate: vitalSigns.heartRate,
+        perfusion_index: perfusionIndex ?? undefined,
+      })
 
-      if (stableReadings.length < 5) {
-        alert("Could not collect stable readings. Please keep your finger still and try again")
-        return
-      }
-
-      // Calculate average of stable readings
-      const avgSpo2 = Math.round(stableReadings.reduce((sum, r) => sum + (r.spo2 || 0), 0) / stableReadings.length)
-      const avgHeartRate = Math.round(stableReadings.reduce((sum, r) => sum + (r.heartRate || 0), 0) / stableReadings.length)
-      const avgPerfusion = parseFloat((stableReadings.reduce((sum, r) => sum + perfusionIndex, 0) / stableReadings.length).toFixed(2))
-
-      let userId: number | null = null
-
-      // Handle patient creation or selection
-      if (isNewPatient) {
-        if (!patientName || !patientEmail) {
-          alert("Please enter patient name and email")
-          return
-        }
-
-        // Create new patient
-        try {
-          const { createUser } = await import("@/lib/api-client")
-          const newUser = await createUser({
-            name: patientName,
-            email: patientEmail,
-            blood_group: localStorage.getItem("lastBloodGroup") || "Unknown",
-            confidence: 0.95,
-          })
-
-          if (newUser) {
-            userId = newUser.id
-            localStorage.setItem("currentUserId", userId.toString())
-            localStorage.setItem("userName", newUser.name)
-            setCurrentPatient({ id: userId, name: newUser.name })
-          } else {
-            alert("Failed to create patient. Email may already exist.")
-            return
-          }
-        } catch (error) {
-          console.error("Error creating patient:", error)
-          alert("Error connecting to server")
-          return
-        }
-      } else if (existingUserId.trim()) {
-        // Use existing patient
-        userId = parseInt(existingUserId)
-        
-        // Verify patient exists
-        try {
-          const { getUser } = await import("@/lib/api-client")
-          const user = await getUser(userId)
-          if (!user) {
-            alert("Patient ID not found. Please check the ID.")
-            return
-          }
-          localStorage.setItem("currentUserId", userId.toString())
-          localStorage.setItem("userName", user.name)
-          setCurrentPatient({ id: userId, name: user.name })
-        } catch (error) {
-          console.error("Error fetching patient:", error)
-          alert("Error connecting to server")
-          return
-        }
+      if (success) {
+        setSaveSuccess(true)
+        setTimeout(() => setSaveSuccess(false), 3000)
+        setError(null)
       } else {
-        alert("Please select an existing patient or create a new one")
-        return
+        setError("Failed to save vital signs")
       }
-
-      // Save vital signs to backend (use averaged values)
-      if (userId) {
-        try {
-          const { addVitalSigns } = await import("@/lib/api-client")
-          await addVitalSigns(userId, {
-            spo2: avgSpo2,
-            heart_rate: avgHeartRate,
-            perfusion_index: avgPerfusion,
-          })
-        } catch (error) {
-          console.error("Failed to save vitals to backend:", error)
-        }
-      }
-
-      // Get blood group from localStorage or prompt user
-      const bloodGroup = localStorage.getItem("lastBloodGroup") || "O+"
-      const userName = currentPatient?.name || localStorage.getItem("userName") || "Patient"
-
-      // Navigate to report page with averaged stable data
-      router.push(
-        `/report?spo2=${avgSpo2}&heartRate=${avgHeartRate}&perfusionIndex=${avgPerfusion}&bloodGroup=${bloodGroup}&userName=${encodeURIComponent(userName)}${userId ? `&userId=${userId}` : ""}`
-      )
     } catch (error) {
-      console.error("Error collecting stable readings:", error)
-      alert("Error collecting readings. Please try again")
+      setError("Error saving vital signs")
     }
   }
 
-  const getSpO2Status = (spo2: number) => {
-    if (spo2 >= 95) return { text: 'Normal', color: 'text-green-600', bg: 'bg-green-500' }
-    if (spo2 >= 90) return { text: 'Low', color: 'text-yellow-600', bg: 'bg-yellow-500' }
-    return { text: 'Critical', color: 'text-red-600', bg: 'bg-red-500' }
+  const handleGenerateReport = () => {
+    if (!userVerified || !userId) {
+      setError("Please verify your Patient ID first")
+      return
+    }
+
+    router.push(`/report?userId=${userId}`)
   }
 
-  const getHeartRateStatus = (hr: number) => {
-    if (hr >= 60 && hr <= 100) return { text: 'Normal (60-100)', color: 'text-green-600' }
-    if (hr < 60) return { text: 'Bradycardia (Low)', color: 'text-blue-600' }
-    return { text: 'Tachycardia (High)', color: 'text-red-600' }
+  const getStatusColor = (value: number | null, type: 'spo2' | 'hr') => {
+    if (value === null) return 'text-gray-400'
+    
+    if (type === 'spo2') {
+      if (value >= 95) return 'text-green-600'
+      if (value >= 90) return 'text-yellow-600'
+      return 'text-red-600'
+    } else {
+      if (value >= 60 && value <= 100) return 'text-green-600'
+      if (value >= 50 && value <= 120) return 'text-yellow-600'
+      return 'text-red-600'
+    }
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 via-blue-50 to-white">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-green-50">
       <div className="container mx-auto px-4 py-8">
         <Link href="/">
           <Button variant="ghost" className="mb-6">
@@ -259,337 +169,224 @@ export default function VitalsPage() {
           </Button>
         </Link>
 
-        <div className="max-w-5xl mx-auto">
-          {/* Header */}
-          <div className="text-center mb-8">
-            <div className="flex justify-center mb-4">
-              <div className="bg-purple-600 p-4 rounded-full">
-                <Activity className="w-12 h-12 text-white" />
-              </div>
-            </div>
-            <h1 className="text-4xl font-bold text-gray-900 mb-3">Vital Signs Monitor</h1>
-            <p className="text-lg text-gray-600">Real-time SpO2 and Heart Rate monitoring</p>
-            
-            {/* Connection Status */}
-            <div className="flex items-center justify-center gap-2 mt-4">
-              {isConnected ? (
-                <>
-                  <Wifi className="w-5 h-5 text-green-600" />
-                  <span className="text-sm font-medium text-green-600">ESP32 Connected</span>
-                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                </>
-              ) : (
-                <>
-                  <WifiOff className="w-5 h-5 text-red-600" />
-                  <span className="text-sm font-medium text-red-600">ESP32 Disconnected</span>
-                  <div className="w-2 h-2 bg-red-500 rounded-full"></div>
-                </>
-              )}
-            </div>
-          </div>
+        <div className="max-w-4xl mx-auto space-y-6">
+          {/* Patient ID Verification */}
+          {!userVerified && (
+            <Card className="border-blue-100 shadow-lg">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <UserIcon className="w-6 h-6" />
+                  Patient Identification
+                </CardTitle>
+                <CardDescription>
+                  Enter your Patient ID to save vital signs
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="userId">Patient ID</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="userId"
+                      type="text"
+                      placeholder="Enter your Patient ID (e.g., P001)"
+                      value={userId}
+                      onChange={(e) => setUserId(e.target.value.toUpperCase())}
+                      className="font-mono flex-1"
+                      onKeyDown={(e) => e.key === 'Enter' && handleVerifyUser()}
+                    />
+                    <Button onClick={handleVerifyUser}>
+                      Verify
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Don't have a Patient ID? <Link href="/scan" className="text-blue-600 hover:underline">Register here</Link>
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
-          {/* Error Alert */}
-          {error && (
-            <Alert className="mb-6 border-red-200 bg-red-50">
-              <AlertCircle className="h-4 w-4 text-red-600" />
-              <AlertDescription className="text-red-900">
-                <strong>Connection Error:</strong> {error}
-                <br />
-                <span className="text-sm">Check ESP32 device and network connection.</span>
+          {/* User Info Banner */}
+          {userVerified && (
+            <Alert className="border-green-200 bg-green-50">
+              <CheckCircle2 className="h-4 w-4 text-green-600" />
+              <AlertDescription className="text-green-900">
+                Patient verified: <span className="font-semibold">{userName}</span> (ID: {userId})
               </AlertDescription>
             </Alert>
           )}
 
-          {/* Patient Selection Card */}
-          <Card className="mb-6 border-purple-200 bg-white shadow-lg">
+          {/* Connection Status */}
+          <Card className="border-blue-100 shadow-lg">
             <CardHeader>
-              <CardTitle className="text-lg">Patient Information</CardTitle>
-              <CardDescription>Select existing patient or create new patient record</CardDescription>
+              <CardTitle className="text-3xl text-balance flex items-center justify-between">
+                <span>Vital Signs Monitoring</span>
+                {isConnected ? (
+                  <Wifi className="w-6 h-6 text-green-600" />
+                ) : (
+                  <WifiOff className="w-6 h-6 text-red-600" />
+                )}
+              </CardTitle>
+              <CardDescription className="text-base">
+                Real-time monitoring from ESP32 MAX30102 sensor
+              </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center gap-2 mb-3">
-                <Button
-                  type="button"
-                  variant={!isNewPatient ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setIsNewPatient(false)}
-                  className="flex-1"
-                >
-                  Existing Patient
-                </Button>
-                <Button
-                  type="button"
-                  variant={isNewPatient ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setIsNewPatient(true)}
-                  className="flex-1"
-                >
-                  New Patient
-                </Button>
-              </div>
-
-              {!isNewPatient ? (
-                <div className="space-y-2">
-                  <Label htmlFor="userId" className="text-sm">
-                    Patient ID
-                  </Label>
-                  <Input
-                    id="userId"
-                    type="number"
-                    placeholder="Enter Patient ID"
-                    value={existingUserId}
-                    onChange={(e) => setExistingUserId(e.target.value)}
-                    className="font-mono"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Enter the patient's ID to save vitals to their record.
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <div className="space-y-2">
-                    <Label htmlFor="patientName" className="text-sm">
-                      Patient Name *
-                    </Label>
-                    <Input
-                      id="patientName"
-                      placeholder="Enter full name"
-                      value={patientName}
-                      onChange={(e) => setPatientName(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="patientEmail" className="text-sm">
-                      Email Address *
-                    </Label>
-                    <Input
-                      id="patientEmail"
-                      type="email"
-                      placeholder="patient@example.com"
-                      value={patientEmail}
-                      onChange={(e) => setPatientEmail(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    A new patient record will be created when you generate the report.
-                  </p>
-                </div>
-              )}
-
-              {currentPatient && (
-                <Alert className="border-green-200 bg-green-50">
-                  <CheckCircle2 className="h-4 w-4 text-green-600" />
-                  <AlertDescription className="text-green-900">
-                    <strong>Current Patient:</strong> {currentPatient.name} (ID: {currentPatient.id})
+            <CardContent className="space-y-6">
+              {/* Connection Status Alert */}
+              {isLoading && (
+                <Alert className="border-blue-200 bg-blue-50">
+                  <RefreshCcw className="h-4 w-4 text-blue-600 animate-spin" />
+                  <AlertDescription className="text-blue-900">
+                    Connecting to ESP32 device...
                   </AlertDescription>
                 </Alert>
               )}
-            </CardContent>
-          </Card>
 
-          {/* Loading State */}
-          {isLoading && !isConnected && (
-            <Alert className="mb-6 border-blue-200 bg-blue-50">
-              <Activity className="h-4 w-4 text-blue-600 animate-spin" />
-              <AlertDescription className="text-blue-900">
-                Connecting to ESP32 gateway...
-              </AlertDescription>
-            </Alert>
-          )}
+              {!isConnected && !isLoading && (
+                <Alert className="border-red-200 bg-red-50">
+                  <AlertCircle className="h-4 w-4 text-red-600" />
+                  <AlertDescription className="text-red-900">
+                    {error || "Unable to connect to ESP32 device. Please check device connection."}
+                  </AlertDescription>
+                </Alert>
+              )}
 
-          {/* Main Vital Signs Display */}
-          <div className="grid md:grid-cols-2 gap-6 mb-6">
-            {/* SpO2 Card */}
-            <Card className="border-2 border-blue-200 shadow-lg bg-white">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="bg-blue-100 p-3 rounded-full">
-                      <Activity className="w-8 h-8 text-blue-600" />
+              {isConnected && (
+                <Alert className="border-green-200 bg-green-50">
+                  <CheckCircle2 className="h-4 w-4 text-green-600" />
+                  <AlertDescription className="text-green-900">
+                    Connected to ESP32 device
+                    {lastUpdate && (
+                      <span className="ml-2 text-xs">
+                        (Last update: {lastUpdate.toLocaleTimeString()})
+                      </span>
+                    )}
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {/* Vital Signs Display */}
+              <div className="grid md:grid-cols-2 gap-4">
+                {/* SpO2 Card */}
+                <Card className="border-2">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-lg flex items-center gap-2">
+                      <Activity className="w-5 h-5 text-blue-600" />
+                      Blood Oxygen (SpO2)
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-center">
+                      <div className={`text-6xl font-bold ${getStatusColor(vitalSigns.spo2, 'spo2')}`}>
+                        {vitalSigns.spo2 !== null ? vitalSigns.spo2.toFixed(1) : '--'}
+                      </div>
+                      <div className="text-2xl text-gray-600 mt-2">%</div>
+                      <div className="mt-4 text-sm text-gray-600">
+                        Normal: 95-100%
+                      </div>
                     </div>
-                    <div>
-                      <CardTitle className="text-xl">Blood Oxygen</CardTitle>
-                      <CardDescription>SpO2 Level</CardDescription>
+                  </CardContent>
+                </Card>
+
+                {/* Heart Rate Card */}
+                <Card className="border-2">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-lg flex items-center gap-2">
+                      <Heart className="w-5 h-5 text-red-600" />
+                      Heart Rate
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-center">
+                      <div className={`text-6xl font-bold ${getStatusColor(vitalSigns.heartRate, 'hr')}`}>
+                        {vitalSigns.heartRate !== null ? Math.round(vitalSigns.heartRate) : '--'}
+                      </div>
+                      <div className="text-2xl text-gray-600 mt-2">BPM</div>
+                      <div className="mt-4 text-sm text-gray-600">
+                        Normal: 60-100 BPM
+                      </div>
                     </div>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-baseline gap-2 mb-4">
-                  <span className="text-6xl font-bold text-blue-600">
-                    {vitalSigns.spo2 ?? '--'}
-                  </span>
-                  <span className="text-3xl text-gray-500">%</span>
-                </div>
-                
-                {vitalSigns.spo2 !== null && (
-                  <>
-                    <div className="w-full bg-gray-200 rounded-full h-3 mb-3">
-                      <div 
-                        className={`h-3 rounded-full transition-all duration-500 ${getSpO2Status(vitalSigns.spo2).bg}`}
-                        style={{ width: `${Math.min(vitalSigns.spo2, 100)}%` }}
-                      ></div>
-                    </div>
-                    <p className={`text-base font-semibold ${getSpO2Status(vitalSigns.spo2).color}`}>
-                      ✓ {getSpO2Status(vitalSigns.spo2).text}
-                    </p>
-                  </>
-                )}
-
-                {vitalSigns.spo2 === null && (
-                  <p className="text-gray-400 text-sm">Waiting for sensor data...</p>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Heart Rate Card */}
-            <Card className="border-2 border-red-200 shadow-lg bg-white">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="bg-red-100 p-3 rounded-full">
-                      <Heart className={`w-8 h-8 text-red-600 ${vitalSigns.heartRate ? 'animate-pulse' : ''}`} />
-                    </div>
-                    <div>
-                      <CardTitle className="text-xl">Heart Rate</CardTitle>
-                      <CardDescription>Beats per minute</CardDescription>
-                    </div>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-baseline gap-2 mb-4">
-                  <span className="text-6xl font-bold text-red-600">
-                    {vitalSigns.heartRate ?? '--'}
-                  </span>
-                  <span className="text-3xl text-gray-500">bpm</span>
-                </div>
-                
-                {vitalSigns.heartRate !== null && (
-                  <p className={`text-base font-semibold ${getHeartRateStatus(vitalSigns.heartRate).color}`}>
-                    ✓ {getHeartRateStatus(vitalSigns.heartRate).text}
-                  </p>
-                )}
-
-                {vitalSigns.heartRate === null && (
-                  <p className="text-gray-400 text-sm">Waiting for sensor data...</p>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Status Cards */}
-          <div className="grid md:grid-cols-3 gap-4 mb-6">
-            {/* Finger Detection */}
-            {vitalSigns.fingerDetected !== undefined && (
-              <Card className="bg-white">
-                <CardContent className="pt-6">
-                  <div className="text-center">
-                    <p className="text-sm text-gray-600 mb-2">Finger Status</p>
-                    <p className={`text-lg font-bold ${vitalSigns.fingerDetected ? 'text-green-600' : 'text-gray-400'}`}>
-                      {vitalSigns.fingerDetected ? '✓ Detected' : '○ Not Detected'}
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Data Validity */}
-            {vitalSigns.dataValid !== undefined && (
-              <Card className="bg-white">
-                <CardContent className="pt-6">
-                  <div className="text-center">
-                    <p className="text-sm text-gray-600 mb-2">Data Quality</p>
-                    <p className={`text-lg font-bold ${vitalSigns.dataValid ? 'text-green-600' : 'text-yellow-600'}`}>
-                      {vitalSigns.dataValid ? '✓ Valid' : '⚠ Calibrating'}
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Last Update */}
-            <Card className="bg-white">
-              <CardContent className="pt-6">
-                <div className="text-center">
-                  <p className="text-sm text-gray-600 mb-2">Last Update</p>
-                  <p className="text-lg font-bold text-gray-800">
-                    {lastUpdate ? lastUpdate.toLocaleTimeString() : '--:--:--'}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Instructions and Actions */}
-          <Card className="bg-gradient-to-br from-purple-50 to-blue-50 border-purple-200">
-            <CardHeader>
-              <CardTitle className="text-lg">Instructions</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <p className="text-sm text-gray-700">
-                  <strong>1.</strong> Place your finger gently on the MAX30105 sensor
-                </p>
-                <p className="text-sm text-gray-700">
-                  <strong>2.</strong> Keep your finger still and relaxed
-                </p>
-                <p className="text-sm text-gray-700">
-                  <strong>3.</strong> Wait 3-5 seconds for sensor calibration
-                </p>
-                <p className="text-sm text-gray-700">
-                  <strong>4.</strong> Readings will update automatically every second
-                </p>
+                  </CardContent>
+                </Card>
               </div>
 
-              <div className="flex gap-3 pt-2">
-                <Button 
-                  onClick={handleRefresh} 
-                  variant="outline"
-                  className="flex-1"
-                  disabled={isLoading}
-                >
-                  <RefreshCcw className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
-                  Refresh Connection
-                </Button>
-                <Button 
-                  onClick={handleGenerateReport}
-                  className="flex-1 bg-green-600 hover:bg-green-700"
-                  disabled={!vitalSigns.spo2 || !vitalSigns.heartRate || !vitalSigns.dataValid}
-                >
-                  <FileText className="w-4 h-4 mr-2" />
-                  Generate Health Report
-                </Button>
+              {/* Perfusion Index */}
+              {perfusionIndex !== null && (
+                <div className="bg-gray-50 p-4 rounded-lg">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-medium">Perfusion Index:</span>
+                    <span className="text-lg font-semibold">{perfusionIndex.toFixed(1)}%</span>
+                  </div>
+                  <div className="text-xs text-gray-600 mt-1">
+                    Signal quality indicator (higher is better)
+                  </div>
+                </div>
+              )}
+
+              {/* Finger Detection Status */}
+              {vitalSigns.fingerDetected !== undefined && (
+                <div className="text-center text-sm">
+                  {vitalSigns.fingerDetected ? (
+                    <span className="text-green-600">✓ Finger detected</span>
+                  ) : (
+                    <span className="text-red-600">✗ No finger detected - Please place finger on sensor</span>
+                  )}
+                </div>
+              )}
+
+              {/* Save Success Message */}
+              {saveSuccess && (
+                <Alert className="border-green-200 bg-green-50">
+                  <CheckCircle2 className="h-4 w-4 text-green-600" />
+                  <AlertDescription className="text-green-900">
+                    Vital signs saved successfully!
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {/* Error Message */}
+              {error && userVerified && (
+                <Alert className="border-red-200 bg-red-50">
+                  <AlertCircle className="h-4 w-4 text-red-600" />
+                  <AlertDescription className="text-red-900">{error}</AlertDescription>
+                </Alert>
+              )}
+
+              {/* Action Buttons */}
+              {userVerified && (
+                <div className="grid grid-cols-2 gap-4">
+                  <Button
+                    onClick={handleSaveVitals}
+                    disabled={!vitalSigns.spo2 || !vitalSigns.heartRate}
+                    className="w-full bg-green-600 hover:bg-green-700"
+                    size="lg"
+                  >
+                    Save Vital Signs
+                  </Button>
+                  <Button
+                    onClick={handleGenerateReport}
+                    variant="outline"
+                    className="w-full"
+                    size="lg"
+                  >
+                    Generate Report
+                  </Button>
+                </div>
+              )}
+
+              {/* Instructions */}
+              <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                <h4 className="font-semibold text-sm mb-2">Instructions:</h4>
+                <ol className="text-sm space-y-1 list-decimal list-inside text-gray-700">
+                  <li>Place your finger gently on the MAX30102 sensor</li>
+                  <li>Keep your finger still for 5-10 seconds</li>
+                  <li>Wait for readings to stabilize</li>
+                  <li>Click "Save Vital Signs" to store the data</li>
+                </ol>
               </div>
             </CardContent>
           </Card>
-
-          {/* Connection Status Alert */}
-          {isConnected && vitalSigns.heartRate !== null && (
-            <Alert className="mt-6 border-green-200 bg-green-50">
-              <CheckCircle2 className="h-4 w-4 text-green-600" />
-              <AlertDescription className="text-green-900">
-                <strong>Monitoring Active</strong> - Real-time data streaming from ESP32 gateway
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {!isConnected && !isLoading && (
-            <Alert className="mt-6 border-amber-200 bg-amber-50">
-              <AlertCircle className="h-4 w-4 text-amber-600" />
-              <AlertDescription className="text-amber-900">
-                <strong>Connection Lost</strong> - Please check:
-                <ul className="list-disc list-inside mt-2 text-sm">
-                  <li>ESP32 device is powered on</li>
-                  <li>WiFi connection is active</li>
-                  <li>Correct IP address in .env.local</li>
-                  <li>Both devices are on the same network</li>
-                </ul>
-              </AlertDescription>
-            </Alert>
-          )}
         </div>
       </div>
     </div>

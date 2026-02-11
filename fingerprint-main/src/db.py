@@ -40,13 +40,17 @@ def init_db():
         with get_db_connection() as conn:
             c = conn.cursor()
             
-            # Create users table
+            # Create users table with custom user_id support
             c.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT UNIQUE NOT NULL,
                     name TEXT NOT NULL,
                     email TEXT UNIQUE NOT NULL,
-                    blood_group TEXT NOT NULL,
+                    phone TEXT,
+                    age INTEGER,
+                    gender TEXT,
+                    blood_group TEXT,
                     confidence REAL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -99,6 +103,7 @@ def init_db():
             ''')
             
             # Create indexes for better query performance
+            c.execute('CREATE INDEX IF NOT EXISTS idx_users_user_id ON users(user_id)')
             c.execute('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)')
             c.execute('CREATE INDEX IF NOT EXISTS idx_scans_user_id ON scans(user_id)')
             c.execute('CREATE INDEX IF NOT EXISTS idx_vitals_user_id ON vital_signs(user_id)')
@@ -110,31 +115,40 @@ def init_db():
         logger.error(f"Failed to initialize database: {e}")
         raise
 
-def create_user(name: str, email: str, blood_group: str, confidence: float = None) -> int:
-    """Create a new user and return their ID."""
+def create_user(user_id: str, name: str, email: str, phone: str = None, age: int = None, gender: str = None) -> str:
+    """Create a new user with custom ID and return their user_id."""
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute(
-                'INSERT INTO users (name, email, blood_group, confidence) VALUES (?, ?, ?, ?)',
-                (name, email, blood_group, confidence)
+                'INSERT INTO users (user_id, name, email, phone, age, gender) VALUES (?, ?, ?, ?, ?, ?)',
+                (user_id, name, email, phone, age, gender)
             )
-            user_id = c.lastrowid
             logger.info(f"Created user {user_id}: {name} ({email})")
             return user_id
     except sqlite3.IntegrityError as e:
-        logger.warning(f"Failed to create user - email already exists: {email}")
-        raise ValueError("Email already exists")
+        error_msg = str(e).lower()
+        if 'user_id' in error_msg:
+            logger.warning(f"Failed to create user - user ID already exists: {user_id}")
+            raise ValueError("User ID already exists")
+        elif 'email' in error_msg:
+            logger.warning(f"Failed to create user - email already exists: {email}")
+            raise ValueError("Email already exists")
+        else:
+            raise ValueError("User ID or email already exists")
     except Exception as e:
         logger.error(f"Error creating user: {e}")
         raise
 
-def get_user(user_id: int) -> Optional[Dict[str, Any]]:
-    """Get user details by ID."""
+def get_user(user_id: str) -> Optional[Dict[str, Any]]:
+    """Get user details by custom user_id."""
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
-            c.execute('SELECT id, name, email, blood_group, confidence, created_at, updated_at FROM users WHERE id = ?', (user_id,))
+            c.execute('''
+                SELECT id, user_id, name, email, phone, age, gender, blood_group, confidence, created_at, updated_at 
+                FROM users WHERE user_id = ?
+            ''', (user_id,))
             row = c.fetchone()
             if not row:
                 return None
@@ -157,26 +171,28 @@ def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
         logger.error(f"Error fetching user by email {email}: {e}")
         raise
 
-def update_user_blood_group(user_id: int, blood_group: str, confidence: float = None) -> bool:
+def update_user_blood_group(user_id: str, blood_group: str, confidence: float = None) -> bool:
     """Update a user's blood group and add to scan history."""
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
-            # First verify user exists
-            c.execute('SELECT 1 FROM users WHERE id = ?', (user_id,))
-            if not c.fetchone():
+            # First verify user exists and get internal ID
+            c.execute('SELECT id FROM users WHERE user_id = ?', (user_id,))
+            row = c.fetchone()
+            if not row:
                 return False
+            internal_id = row['id']
                 
             # Update user's current blood group
             c.execute(
-                'UPDATE users SET blood_group = ?, confidence = ?, updated_at = ? WHERE id = ?',
+                'UPDATE users SET blood_group = ?, confidence = ?, updated_at = ? WHERE user_id = ?',
                 (blood_group, confidence, datetime.now(), user_id)
             )
             
             # Add to scans history
             c.execute(
                 'INSERT INTO scans (user_id, blood_group, confidence) VALUES (?, ?, ?)',
-                (user_id, blood_group, confidence)
+                (internal_id, blood_group, confidence)
             )
             
             logger.info(f"Updated blood group for user {user_id}: {blood_group}")
@@ -185,14 +201,21 @@ def update_user_blood_group(user_id: int, blood_group: str, confidence: float = 
         logger.error(f"Error updating blood group for user {user_id}: {e}")
         raise
 
-def add_vital_signs(user_id: int, spo2: float, heart_rate: float, perfusion_index: float = None) -> int:
+def add_vital_signs(user_id: str, spo2: float, heart_rate: float, perfusion_index: float = None) -> int:
     """Add vital signs record for a user."""
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
+            # Get internal ID
+            c.execute('SELECT id FROM users WHERE user_id = ?', (user_id,))
+            row = c.fetchone()
+            if not row:
+                raise ValueError(f"User {user_id} not found")
+            internal_id = row['id']
+            
             c.execute(
                 'INSERT INTO vital_signs (user_id, spo2, heart_rate, perfusion_index) VALUES (?, ?, ?, ?)',
-                (user_id, spo2, heart_rate, perfusion_index)
+                (internal_id, spo2, heart_rate, perfusion_index)
             )
             vital_id = c.lastrowid
             logger.info(f"Added vital signs for user {user_id}")
@@ -201,53 +224,74 @@ def add_vital_signs(user_id: int, spo2: float, heart_rate: float, perfusion_inde
         logger.error(f"Error adding vital signs for user {user_id}: {e}")
         raise
 
-def get_latest_vital_signs(user_id: int) -> Optional[Dict[str, Any]]:
+def get_latest_vital_signs(user_id: str) -> Optional[Dict[str, Any]]:
     """Get the most recent vital signs for a user."""
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
+            # Get internal ID
+            c.execute('SELECT id FROM users WHERE user_id = ?', (user_id,))
+            row = c.fetchone()
+            if not row:
+                return None
+            internal_id = row['id']
+            
             c.execute('''
                 SELECT spo2, heart_rate, perfusion_index, recorded_at
                 FROM vital_signs
                 WHERE user_id = ?
                 ORDER BY recorded_at DESC
                 LIMIT 1
-            ''', (user_id,))
+            ''', (internal_id,))
             row = c.fetchone()
             return dict(row) if row else None
     except Exception as e:
         logger.error(f"Error fetching latest vitals for user {user_id}: {e}")
         raise
 
-def get_vital_signs_history(user_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+def get_vital_signs_history(user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
     """Get vital signs history for a user."""
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
+            # Get internal ID
+            c.execute('SELECT id FROM users WHERE user_id = ?', (user_id,))
+            row = c.fetchone()
+            if not row:
+                return []
+            internal_id = row['id']
+            
             c.execute('''
                 SELECT spo2, heart_rate, perfusion_index, recorded_at
                 FROM vital_signs
                 WHERE user_id = ?
                 ORDER BY recorded_at DESC
                 LIMIT ?
-            ''', (user_id, limit))
+            ''', (internal_id, limit))
             return [dict(row) for row in c.fetchall()]
     except Exception as e:
         logger.error(f"Error fetching vital signs history for user {user_id}: {e}")
         raise
 
-def save_health_report(user_id: int, report_data: dict) -> int:
+def save_health_report(user_id: str, report_data: dict) -> int:
     """Save a generated health report."""
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
+            # Get internal ID
+            c.execute('SELECT id FROM users WHERE user_id = ?', (user_id,))
+            row = c.fetchone()
+            if not row:
+                raise ValueError(f"User {user_id} not found")
+            internal_id = row['id']
+            
             c.execute('''
                 INSERT INTO health_reports (
                     user_id, report_id, blood_group, spo2, heart_rate, perfusion_index,
                     spo2_status, heart_rate_status, overall_severity, overall_summary, critical_alert
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                user_id,
+                internal_id,
                 report_data.get('reportId'),
                 report_data.get('bloodGroup'),
                 report_data.get('spo2'),
@@ -266,11 +310,18 @@ def save_health_report(user_id: int, report_data: dict) -> int:
         logger.error(f"Error saving health report for user {user_id}: {e}")
         raise
 
-def get_user_reports(user_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+def get_user_reports(user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
     """Get health reports for a user."""
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
+            # Get internal ID
+            c.execute('SELECT id FROM users WHERE user_id = ?', (user_id,))
+            row = c.fetchone()
+            if not row:
+                return []
+            internal_id = row['id']
+            
             c.execute('''
                 SELECT report_id, blood_group, spo2, heart_rate, perfusion_index,
                        spo2_status, heart_rate_status, overall_severity, overall_summary,
@@ -279,7 +330,7 @@ def get_user_reports(user_id: int, limit: int = 10) -> List[Dict[str, Any]]:
                 WHERE user_id = ?
                 ORDER BY generated_at DESC
                 LIMIT ?
-            ''', (user_id, limit))
+            ''', (internal_id, limit))
             return [dict(row) for row in c.fetchall()]
     except Exception as e:
         logger.error(f"Error fetching reports for user {user_id}: {e}")
@@ -291,7 +342,7 @@ def list_users(limit: int = 100) -> List[Dict[str, Any]]:
         with get_db_connection() as conn:
             c = conn.cursor()
             c.execute('''
-                SELECT id, name, email, blood_group, confidence, created_at, updated_at 
+                SELECT id, user_id, name, email, phone, age, gender, blood_group, confidence, created_at, updated_at 
                 FROM users 
                 ORDER BY updated_at DESC
                 LIMIT ?
@@ -301,24 +352,31 @@ def list_users(limit: int = 100) -> List[Dict[str, Any]]:
         logger.error(f"Error listing users: {e}")
         raise
 
-def get_user_history(user_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+def get_user_history(user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
     """Get scan history for a specific user."""
     try:
         with get_db_connection() as conn:
             c = conn.cursor()
+            # Get internal ID
+            c.execute('SELECT id FROM users WHERE user_id = ?', (user_id,))
+            row = c.fetchone()
+            if not row:
+                return []
+            internal_id = row['id']
+            
             c.execute('''
                 SELECT blood_group, confidence, scanned_at
                 FROM scans
                 WHERE user_id = ?
                 ORDER BY scanned_at DESC
                 LIMIT ?
-            ''', (user_id, limit))
+            ''', (internal_id, limit))
             return [dict(row) for row in c.fetchall()]
     except Exception as e:
         logger.error(f"Error fetching history for user {user_id}: {e}")
         raise
 
-def get_user_complete_data(user_id: int) -> Optional[Dict[str, Any]]:
+def get_user_complete_data(user_id: str) -> Optional[Dict[str, Any]]:
     """Get complete user data including latest vitals and reports."""
     try:
         user = get_user(user_id)
