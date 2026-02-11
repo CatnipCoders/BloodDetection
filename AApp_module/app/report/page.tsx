@@ -105,139 +105,19 @@ export default function ReportPage() {
     await loadPatientReport(patient.id)
   }
 
-  const handleDownloadPDF = () => {
+  const handleDownloadPDF = async () => {
     if (!report) return
 
-    import("jspdf").then(({ default: jsPDF }) => {
-      const doc = new jsPDF()
-      const pageWidth = doc.internal.pageSize.getWidth()
-      let yPos = 20
-
-      // Header
-      doc.setFontSize(20)
-      doc.setTextColor(220, 38, 38)
-      doc.text("HEALTH REPORT", pageWidth / 2, yPos, { align: "center" })
-      yPos += 15
-
-      // Patient Info
-      doc.setFontSize(12)
-      doc.setTextColor(0, 0, 0)
-      doc.text(`Patient: ${report.patientName}`, 20, yPos)
-      yPos += 7
-      if (selectedPatient) {
-        doc.text(`Patient ID: ${selectedPatient.id}`, 20, yPos)
-        yPos += 7
-        doc.text(`Email: ${selectedPatient.email}`, 20, yPos)
-        yPos += 7
-      }
-      doc.text(`Date: ${new Date(report.timestamp).toLocaleString()}`, 20, yPos)
-      yPos += 7
-      doc.text(`Report ID: ${report.reportId}`, 20, yPos)
-      yPos += 15
-
-      // Vital Signs
-      doc.setFontSize(14)
-      doc.setTextColor(37, 99, 235)
-      doc.text("VITAL SIGNS", 20, yPos)
-      yPos += 10
-
-      doc.setFontSize(11)
-      doc.setTextColor(0, 0, 0)
-      doc.text(`Blood Group: ${report.bloodGroup}`, 25, yPos)
-      yPos += 7
-      doc.text(`SpO2: ${report.spo2}% (${report.spo2Status})`, 25, yPos)
-      yPos += 7
-      doc.text(`Heart Rate: ${report.heartRate} bpm (${report.heartRateStatus})`, 25, yPos)
-      yPos += 7
-      doc.text(`Perfusion Index: ${report.perfusionIndex}%`, 25, yPos)
-      yPos += 12
-
-      // Overall Status
-      doc.setFontSize(14)
-      doc.setTextColor(37, 99, 235)
-      doc.text("HEALTH STATUS", 20, yPos)
-      yPos += 10
-
-      doc.setFontSize(11)
-      doc.setTextColor(0, 0, 0)
-      doc.text(`Severity: ${report.overallStatus.severity}`, 25, yPos)
-      yPos += 7
-      
-      const summaryLines = doc.splitTextToSize(report.overallStatus.summary, pageWidth - 50)
-      doc.text(summaryLines, 25, yPos)
-      yPos += summaryLines.length * 7 + 5
-
-      // Critical Alert
-      if (report.criticalAlert) {
-        doc.setFontSize(12)
-        doc.setTextColor(220, 38, 38)
-        doc.text("⚠ CRITICAL ALERT", 20, yPos)
-        yPos += 8
-        doc.setFontSize(10)
-        const alertLines = doc.splitTextToSize(report.criticalAlert, pageWidth - 50)
-        doc.text(alertLines, 25, yPos)
-        yPos += alertLines.length * 6 + 10
-      }
-
-      // Recommendations
-      if (yPos > 250) {
-        doc.addPage()
-        yPos = 20
-      }
-
-      doc.setFontSize(14)
-      doc.setTextColor(37, 99, 235)
-      doc.text("RECOMMENDATIONS", 20, yPos)
-      yPos += 10
-
-      doc.setFontSize(10)
-      doc.setTextColor(0, 0, 0)
-      report.recommendations.forEach((rec, idx) => {
-        if (yPos > 270) {
-          doc.addPage()
-          yPos = 20
-        }
-        const recLines = doc.splitTextToSize(`${idx + 1}. ${rec}`, pageWidth - 50)
-        doc.text(recLines, 25, yPos)
-        yPos += recLines.length * 6 + 3
-      })
-
-      // Precautions
-      if (yPos > 250) {
-        doc.addPage()
-        yPos = 20
-      }
-
-      yPos += 5
-      doc.setFontSize(14)
-      doc.setTextColor(37, 99, 235)
-      doc.text("PRECAUTIONS", 20, yPos)
-      yPos += 10
-
-      doc.setFontSize(10)
-      doc.setTextColor(0, 0, 0)
-      report.precautions.forEach((prec, idx) => {
-        if (yPos > 270) {
-          doc.addPage()
-          yPos = 20
-        }
-        const precLines = doc.splitTextToSize(`${idx + 1}. ${prec}`, pageWidth - 50)
-        doc.text(precLines, 25, yPos)
-        yPos += precLines.length * 6 + 3
-      })
-
-      // Footer
-      doc.setFontSize(8)
-      doc.setTextColor(100, 100, 100)
-      doc.text(
-        "This report is generated automatically. Consult a healthcare professional for medical advice.",
-        pageWidth / 2,
-        doc.internal.pageSize.getHeight() - 10,
-        { align: "center" }
-      )
-
-      doc.save(`health-report-${report.reportId}.pdf`)
-    })
+    try {
+      const { generateProfessionalPDF } = await import("@/lib/pdf-generator")
+      await generateProfessionalPDF(report, selectedPatient ? {
+        id: selectedPatient.id,
+        email: selectedPatient.email
+      } : undefined)
+    } catch (error) {
+      console.error("Error generating PDF:", error)
+      alert("Error generating PDF. Please try again.")
+    }
   }
 
   const getSeverityColor = (severity: string) => {

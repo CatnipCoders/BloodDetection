@@ -112,91 +112,129 @@ export default function VitalsPage() {
   }
 
   const handleGenerateReport = async () => {
+    // Check if data is valid and stable
     if (!vitalSigns.spo2 || !vitalSigns.heartRate) {
       alert("Please wait for valid vital signs data before generating a report")
       return
     }
 
-    let userId: number | null = null
-
-    // Handle patient creation or selection
-    if (isNewPatient) {
-      if (!patientName || !patientEmail) {
-        alert("Please enter patient name and email")
-        return
-      }
-
-      // Create new patient
-      try {
-        const { createUser } = await import("@/lib/api-client")
-        const newUser = await createUser({
-          name: patientName,
-          email: patientEmail,
-          blood_group: localStorage.getItem("lastBloodGroup") || "Unknown",
-          confidence: 0.95,
-        })
-
-        if (newUser) {
-          userId = newUser.id
-          localStorage.setItem("currentUserId", userId.toString())
-          localStorage.setItem("userName", newUser.name)
-          setCurrentPatient({ id: userId, name: newUser.name })
-        } else {
-          alert("Failed to create patient. Email may already exist.")
-          return
-        }
-      } catch (error) {
-        console.error("Error creating patient:", error)
-        alert("Error connecting to server")
-        return
-      }
-    } else if (existingUserId.trim()) {
-      // Use existing patient
-      userId = parseInt(existingUserId)
-      
-      // Verify patient exists
-      try {
-        const { getUser } = await import("@/lib/api-client")
-        const user = await getUser(userId)
-        if (!user) {
-          alert("Patient ID not found. Please check the ID.")
-          return
-        }
-        localStorage.setItem("currentUserId", userId.toString())
-        localStorage.setItem("userName", user.name)
-        setCurrentPatient({ id: userId, name: user.name })
-      } catch (error) {
-        console.error("Error fetching patient:", error)
-        alert("Error connecting to server")
-        return
-      }
-    } else {
-      alert("Please select an existing patient or create a new one")
+    if (!vitalSigns.dataValid) {
+      alert("Sensor is still calibrating. Please wait for stable readings (green 'Valid' status)")
       return
     }
 
-    // Save vital signs to backend
-    if (userId) {
-      try {
-        const { addVitalSigns } = await import("@/lib/api-client")
-        await addVitalSigns(userId, {
-          spo2: vitalSigns.spo2,
-          heart_rate: vitalSigns.heartRate,
-          perfusion_index: perfusionIndex,
-        })
-      } catch (error) {
-        console.error("Failed to save vitals to backend:", error)
-      }
+    if (!vitalSigns.fingerDetected) {
+      alert("No finger detected. Please place your finger on the sensor")
+      return
     }
 
-    // Get blood group from localStorage or prompt user
-    const bloodGroup = localStorage.getItem("lastBloodGroup") || "O+"
-    const userName = currentPatient?.name || localStorage.getItem("userName") || "Patient"
+    // Wait for stable readings (collect 10 readings over 1 second)
+    const stableReadings: VitalSigns[] = []
+    const stabilizationAlert = alert("Collecting stable readings... Please keep your finger still")
+    
+    try {
+      // Collect readings for 1 second
+      for (let i = 0; i < 10; i++) {
+        await new Promise(resolve => setTimeout(resolve, 100))
+        if (vitalSigns.spo2 && vitalSigns.heartRate && vitalSigns.dataValid) {
+          stableReadings.push({ ...vitalSigns })
+        }
+      }
 
-    // Navigate to report page with data
-    router.push(
-      `/report?spo2=${vitalSigns.spo2}&heartRate=${vitalSigns.heartRate}&perfusionIndex=${perfusionIndex}&bloodGroup=${bloodGroup}&userName=${encodeURIComponent(userName)}${userId ? `&userId=${userId}` : ""}`
-    )
+      if (stableReadings.length < 5) {
+        alert("Could not collect stable readings. Please keep your finger still and try again")
+        return
+      }
+
+      // Calculate average of stable readings
+      const avgSpo2 = Math.round(stableReadings.reduce((sum, r) => sum + (r.spo2 || 0), 0) / stableReadings.length)
+      const avgHeartRate = Math.round(stableReadings.reduce((sum, r) => sum + (r.heartRate || 0), 0) / stableReadings.length)
+      const avgPerfusion = parseFloat((stableReadings.reduce((sum, r) => sum + perfusionIndex, 0) / stableReadings.length).toFixed(2))
+
+      let userId: number | null = null
+
+      // Handle patient creation or selection
+      if (isNewPatient) {
+        if (!patientName || !patientEmail) {
+          alert("Please enter patient name and email")
+          return
+        }
+
+        // Create new patient
+        try {
+          const { createUser } = await import("@/lib/api-client")
+          const newUser = await createUser({
+            name: patientName,
+            email: patientEmail,
+            blood_group: localStorage.getItem("lastBloodGroup") || "Unknown",
+            confidence: 0.95,
+          })
+
+          if (newUser) {
+            userId = newUser.id
+            localStorage.setItem("currentUserId", userId.toString())
+            localStorage.setItem("userName", newUser.name)
+            setCurrentPatient({ id: userId, name: newUser.name })
+          } else {
+            alert("Failed to create patient. Email may already exist.")
+            return
+          }
+        } catch (error) {
+          console.error("Error creating patient:", error)
+          alert("Error connecting to server")
+          return
+        }
+      } else if (existingUserId.trim()) {
+        // Use existing patient
+        userId = parseInt(existingUserId)
+        
+        // Verify patient exists
+        try {
+          const { getUser } = await import("@/lib/api-client")
+          const user = await getUser(userId)
+          if (!user) {
+            alert("Patient ID not found. Please check the ID.")
+            return
+          }
+          localStorage.setItem("currentUserId", userId.toString())
+          localStorage.setItem("userName", user.name)
+          setCurrentPatient({ id: userId, name: user.name })
+        } catch (error) {
+          console.error("Error fetching patient:", error)
+          alert("Error connecting to server")
+          return
+        }
+      } else {
+        alert("Please select an existing patient or create a new one")
+        return
+      }
+
+      // Save vital signs to backend (use averaged values)
+      if (userId) {
+        try {
+          const { addVitalSigns } = await import("@/lib/api-client")
+          await addVitalSigns(userId, {
+            spo2: avgSpo2,
+            heart_rate: avgHeartRate,
+            perfusion_index: avgPerfusion,
+          })
+        } catch (error) {
+          console.error("Failed to save vitals to backend:", error)
+        }
+      }
+
+      // Get blood group from localStorage or prompt user
+      const bloodGroup = localStorage.getItem("lastBloodGroup") || "O+"
+      const userName = currentPatient?.name || localStorage.getItem("userName") || "Patient"
+
+      // Navigate to report page with averaged stable data
+      router.push(
+        `/report?spo2=${avgSpo2}&heartRate=${avgHeartRate}&perfusionIndex=${avgPerfusion}&bloodGroup=${bloodGroup}&userName=${encodeURIComponent(userName)}${userId ? `&userId=${userId}` : ""}`
+      )
+    } catch (error) {
+      console.error("Error collecting stable readings:", error)
+      alert("Error collecting readings. Please try again")
+    }
   }
 
   const getSpO2Status = (spo2: number) => {

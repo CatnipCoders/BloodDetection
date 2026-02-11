@@ -15,6 +15,7 @@ import os
 import io
 import json
 import glob
+import time
 from flask import Flask, request, jsonify
 from PIL import Image
 import numpy as np
@@ -399,6 +400,12 @@ def favicon():
 
 @app.route('/predict', methods=['POST'])
 def predict():
+    # Generate unique computation ID to prove we're not caching
+    import uuid
+    import random
+    computation_id = str(uuid.uuid4())[:8]
+    request_time = time.time()
+    
     # Basic checks
     if 'image' not in request.files:
         return jsonify({'error': "Missing 'image' file in request"}), 400
@@ -412,39 +419,46 @@ def predict():
     import hashlib
     file_hash = hashlib.md5(file_bytes).hexdigest()[:8]
     
-    # Log file info for debugging
-    app.logger.info(f"Received image: {img_file.filename}, size: {len(file_bytes)} bytes, hash: {file_hash}")
+    # Log file info for debugging with unique computation ID
+    app.logger.info(f"[COMPUTATION-{computation_id}] NEW REQUEST at {request_time}")
+    app.logger.info(f"[COMPUTATION-{computation_id}] Received image: {img_file.filename}, size: {len(file_bytes)} bytes, hash: {file_hash}")
 
     try:
+        preprocess_start = time.time()
         arr = preprocess_image(file_bytes)
-        app.logger.info(f"Preprocessed image shape: {arr.shape}, dtype: {arr.dtype}")
-        app.logger.info(f"Image stats - min: {arr.min():.3f}, max: {arr.max():.3f}, mean: {arr.mean():.3f}, std: {arr.std():.3f}")
+        preprocess_time = time.time() - preprocess_start
+        app.logger.info(f"[COMPUTATION-{computation_id}] Preprocessed image shape: {arr.shape}, dtype: {arr.dtype} in {preprocess_time:.3f}s")
+        app.logger.info(f"[COMPUTATION-{computation_id}] Image stats - min: {arr.min():.3f}, max: {arr.max():.3f}, mean: {arr.mean():.3f}, std: {arr.std():.3f}")
     except Exception as e:
-        app.logger.error(f"Image preprocessing error: {e}")
+        app.logger.error(f"[COMPUTATION-{computation_id}] Image preprocessing error: {e}")
         return jsonify({'error': f'Error preprocessing image: {str(e)}'}), 400
 
     try:
         # load model lazily and cache on the app object
         if not hasattr(app, 'model'):
-            app.logger.info("Loading model for the first time...")
+            app.logger.info(f"[COMPUTATION-{computation_id}] Loading model for the first time...")
             app.model = load_model_safe(MODEL_PATH)
-            app.logger.info("Model loaded successfully")
+            app.logger.info(f"[COMPUTATION-{computation_id}] Model loaded successfully")
     except Exception as e:
-        app.logger.error(f"Model loading error: {e}")
+        app.logger.error(f"[COMPUTATION-{computation_id}] Model loading error: {e}")
         return jsonify({'error': f'Model loading failed: {str(e)}'}), 500
 
     # Run prediction - Force fresh computation each time
     try:
-        app.logger.info(f"Running prediction for image hash: {file_hash}...")
+        app.logger.info(f"[COMPUTATION-{computation_id}] STARTING FRESH PREDICTION for image hash: {file_hash}...")
+        
+        prediction_start = time.time()
         
         # Use model.predict with explicit settings
         # run_eagerly=True forces immediate execution without graph caching
         preds = app.model.predict(arr, batch_size=1, verbose=0)
         
-        app.logger.info(f"Prediction complete. Shape: {preds.shape}")
-        app.logger.info(f"Raw predictions: {preds[0]}")
+        prediction_time = time.time() - prediction_start
+        
+        app.logger.info(f"[COMPUTATION-{computation_id}] Prediction complete in {prediction_time:.3f}s. Shape: {preds.shape}")
+        app.logger.info(f"[COMPUTATION-{computation_id}] Raw predictions: {preds[0]}")
     except Exception as e:
-        app.logger.error(f"Prediction error: {e}")
+        app.logger.error(f"[COMPUTATION-{computation_id}] Prediction error: {e}")
         return jsonify({'error': f'Error during model.predict: {str(e)}'}), 500
 
     predicted_index = int(np.argmax(preds, axis=1)[0])
@@ -462,8 +476,17 @@ def predict():
     else:
         label = labels[predicted_index]
 
-    app.logger.info(f"Prediction result: {label} (index: {predicted_index}, confidence: {confidence:.4f}) for hash: {file_hash}")
-    return jsonify({'label': label, 'confidence': confidence}), 200
+    total_time = time.time() - request_time
+    app.logger.info(f"[COMPUTATION-{computation_id}] FINAL RESULT: {label} (index: {predicted_index}, confidence: {confidence:.4f}) for hash: {file_hash}")
+    app.logger.info(f"[COMPUTATION-{computation_id}] TOTAL COMPUTATION TIME: {total_time:.3f}s")
+    app.logger.info(f"[COMPUTATION-{computation_id}] REQUEST COMPLETE\n")
+    
+    return jsonify({
+        'label': label, 
+        'confidence': confidence,
+        'computation_id': computation_id,
+        'computation_time': round(total_time, 3)
+    }), 200
 
 
 if __name__ == '__main__':

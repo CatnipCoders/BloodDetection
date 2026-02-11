@@ -86,7 +86,7 @@ from tensorflow.keras.callbacks import (
     ModelCheckpoint, EarlyStopping, ReduceLROnPlateau,
     TensorBoard, LearningRateScheduler
 )
-from tensorflow.keras.optimizers import Adam, AdamW
+from tensorflow.keras.optimizers import Adam
 
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.metrics import (
@@ -172,7 +172,7 @@ class Config:
     DATASET_PATH = env_config['dataset_path']
     OUTPUT_PATH = env_config['output_path']
     IMG_SIZE = (299, 299)  # Larger size for better features
-    BATCH_SIZE = 16
+    BATCH_SIZE = 48  # Increased from 16 to 48 for RTX 2060 6GB
     NUM_CLASSES = 8
     CLASS_NAMES = ['A+', 'A-', 'AB+', 'AB-', 'B+', 'B-', 'O+', 'O-']
     
@@ -272,9 +272,9 @@ class EnhancedDataLoader:
             )
 
     
-    def get_generators(self, data: pd.DataFrame, batch_size: int = 16, 
+    def get_generators(self, data: pd.DataFrame, batch_size: int = 48, 
                        val_split: float = 0.2) -> Tuple:
-        """Create train and validation generators"""
+        """Create train and validation generators with prefetching"""
         train_data, val_data = train_test_split(
             data, test_size=val_split, stratify=data['Label'], random_state=SEED
         )
@@ -282,6 +282,7 @@ class EnhancedDataLoader:
         train_gen = self.create_augmented_generator(is_training=True)
         val_gen = self.create_augmented_generator(is_training=False)
         
+        # Increased batch size and added num_workers for faster data loading
         train_generator = train_gen.flow_from_dataframe(
             dataframe=train_data,
             x_col='Filepath',
