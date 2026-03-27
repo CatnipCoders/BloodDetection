@@ -9,9 +9,10 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { ArrowLeft, Download, AlertTriangle, CheckCircle, Info, Activity, Droplet, Search, User } from "lucide-react"
+import { ArrowLeft, Download, AlertTriangle, CheckCircle, Info, Activity, Droplet, Search, User, Lock } from "lucide-react"
 import { generateHealthReport, type HealthReport } from "@/lib/health-report"
 import { getUserCompleteData, listUsers, type User as ApiUser } from "@/lib/api-client"
+import { PaymentAccessDialog } from "@/components/payment-access-dialog"
 
 export default function ReportPage() {
   const searchParams = useSearchParams()
@@ -21,6 +22,10 @@ export default function ReportPage() {
   const [patients, setPatients] = useState<ApiUser[]>([])
   const [selectedPatient, setSelectedPatient] = useState<ApiUser | null>(null)
   const [showPatientSelector, setShowPatientSelector] = useState(false)
+  const [accessGranted, setAccessGranted] = useState(false)
+  const [showAccessDialog, setShowAccessDialog] = useState(false)
+  
+  const reportFee = parseInt(process.env.NEXT_PUBLIC_REPORT_FEE || "100")
 
   // Load patients list
   useEffect(() => {
@@ -83,12 +88,23 @@ export default function ReportPage() {
 
         setReport(generatedReport)
         setShowPatientSelector(false)
+        setAccessGranted(false) // Reset access for new patient
       }
     } catch (error) {
       console.error("Error fetching user data:", error)
       setShowPatientSelector(true)
     }
     setLoading(false)
+  }
+
+  const handleRequestAccess = () => {
+    if (!selectedPatient) return
+  setShowAccessDialog(true)
+  }
+
+  const handleAccessGranted = () => {
+  setAccessGranted(true)
+  setShowAccessDialog(false)
   }
 
   const handlePatientSearch = async () => {
@@ -398,6 +414,27 @@ export default function ReportPage() {
         </Link>
 
         <div className="max-w-4xl mx-auto space-y-6">
+          {/* Payment Access Dialog */}
+          {selectedPatient && (
+            <PaymentAccessDialog
+              open={showAccessDialog}
+              onOpenChange={setShowAccessDialog}
+              userName={selectedPatient.name}
+              amount={reportFee}
+              onAccessGranted={handleAccessGranted}
+            />
+          )}
+
+          {/* Access Required Notie */}
+          {!accessGranted && (
+            <Alert className="border-blue-300 bg-blue-50">
+              <Lock className="h-5 w-5 text-blue-600" />
+              <AlertDescription className="text-blue-900">
+                <strong>Payment Required:</strong> Pay ₹{reportFee} once for lifetime access. Returning users enter your password.
+              </AlertDescription>
+            </Alert>
+          )}
+
           {/* Header */}
           <Card className="border-blue-200 shadow-lg">
             <CardHeader>
@@ -421,10 +458,17 @@ export default function ReportPage() {
                   </p>
                 </div>
                 <div className="flex flex-col gap-2">
-                  <Button onClick={handleDownloadPDF} className="bg-blue-600 hover:bg-blue-700">
-                    <Download className="w-4 h-4 mr-2" />
-                    Download PDF
-                  </Button>
+                  {accessGranted ? (
+                    <Button onClick={handleDownloadPDF} className="bg-blue-600 hover:bg-blue-700">
+                      <Download className="w-4 h-4 mr-2" />
+                      Download PDF
+                    </Button>
+                  ) : (
+                    <Button onClick={handleRequestAccess} className="bg-green-600 hover:bg-green-700">
+                      <Lock className="w-4 h-4 mr-2" />
+                      Pay ₹{reportFee} for Access
+                    </Button>
+                  )}
                   <Button
                     onClick={() => setShowPatientSelector(true)}
                     variant="outline"
@@ -439,11 +483,12 @@ export default function ReportPage() {
           </Card>
 
           {/* Vital Signs */}
-          <Card>
+          <Card className={!accessGranted ? "opacity-50 pointer-events-none" : ""}>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Activity className="w-5 h-5 text-blue-600" />
                 Vital Signs
+                {!accessGranted && <Lock className="w-4 h-4 text-gray-400 ml-auto" />}
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -491,7 +536,7 @@ export default function ReportPage() {
           </Card>
 
           {/* Overall Status */}
-          <Card className={getSeverityColor(report.overallStatus.severity)}>
+          <Card className={`${getSeverityColor(report.overallStatus.severity)} ${!accessGranted ? "opacity-50 pointer-events-none" : ""}`}>
             <CardHeader>
               <div className="flex items-center gap-3">
                 {getSeverityIcon(report.overallStatus.severity)}
@@ -501,6 +546,7 @@ export default function ReportPage() {
                     {report.overallStatus.summary}
                   </CardDescription>
                 </div>
+                {!accessGranted && <Lock className="w-4 h-4 text-gray-400 ml-auto" />}
               </div>
             </CardHeader>
           </Card>
@@ -516,11 +562,12 @@ export default function ReportPage() {
           )}
 
           {/* Recommendations */}
-          <Card>
+          <Card className={!accessGranted ? "opacity-50 pointer-events-none" : ""}>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <CheckCircle className="w-5 h-5 text-green-600" />
                 Health Recommendations
+                {!accessGranted && <Lock className="w-4 h-4 text-gray-400 ml-auto" />}
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -538,11 +585,12 @@ export default function ReportPage() {
           </Card>
 
           {/* Precautions */}
-          <Card>
+          <Card className={!accessGranted ? "opacity-50 pointer-events-none" : ""}>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Info className="w-5 h-5 text-blue-600" />
                 Precautions & Lifestyle Tips
+                {!accessGranted && <Lock className="w-4 h-4 text-gray-400 ml-auto" />}
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -560,11 +608,12 @@ export default function ReportPage() {
           </Card>
 
           {/* Blood Group Specific Info */}
-          <Card>
+          <Card className={!accessGranted ? "opacity-50 pointer-events-none" : ""}>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Droplet className="w-5 h-5 text-red-600" />
                 Blood Group: {report.bloodGroup} Information
+                {!accessGranted && <Lock className="w-4 h-4 text-gray-400 ml-auto" />}
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
