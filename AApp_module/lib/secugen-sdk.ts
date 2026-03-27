@@ -1,79 +1,41 @@
 /**
  * SecuGen Hamster Pro 20 SDK Integration
- * 
- * This module provides a TypeScript wrapper for the SecuGen fingerprint scanner.
- * The SecuGen Web API uses a local service that runs on the client machine.
+ * Direct HTTP POST with URL-encoded parameters (matching official demo)
  */
 
-export interface SecuGenDevice {
-  deviceName: string
-  deviceID: number
-  width: number
-  height: number
-}
-
-export interface SecuGenImage {
-  imageData: string // Base64 encoded image
-  width: number
-  height: number
-  quality: number
-}
-
-export interface SecuGenSDK {
-  Init: () => Promise<number>
-  GetDeviceList: () => Promise<SecuGenDevice[]>
-  OpenDevice: (deviceID: number) => Promise<number>
-  CloseDevice: () => Promise<number>
-  GetImage: () => Promise<SecuGenImage>
-  GetImageEx: (timeout: number, quality: number) => Promise<SecuGenImage>
-  SetLedOn: (on: boolean) => Promise<number>
-  GetDeviceInfo: () => Promise<any>
-}
-
-declare global {
-  interface Window {
-    SecuGen?: SecuGenSDK
-    SGIFPLib?: any
-  }
+interface SecuGenResponse {
+  ErrorCode: number
+  BMPBase64?: string
+  ImageWidth?: number
+  ImageHeight?: number
+  ImageQuality?: number
+  ImageDPI?: number
+  NFIQ?: number
+  SerialNumber?: string
+  TemplateBase64?: string
+  WSQImage?: string
+  WSQImageSize?: number
+  [key: string]: any
 }
 
 class SecuGenScanner {
-  private sdk: SecuGenSDK | null = null
-  private deviceID: number = 0
+  private baseUrl: string = 'https://localhost:8443/SGIFPCapture'
+  private fallbackUrl: string = 'http://localhost:8443/SGIFPCapture'
   private isInitialized: boolean = false
-  private isDeviceOpen: boolean = false
+  private deviceOpened: boolean = false
+  private licenseKey: string = '' // Empty for 60-day trial
+  private useHttp: boolean = false // Track if we should use HTTP
 
   /**
-   * Initialize the SecuGen SDK
-   * This should be called when the component mounts
+   * Initialize the SecuGen Web API
    */
   async initialize(): Promise<boolean> {
     try {
-      // Check if SecuGen Web API is available
-      if (!window.SecuGen && !window.SGIFPLib) {
-        console.error('SecuGen SDK not found. Please install SecuGen Web API.')
-        return false
-      }
-
-      this.sdk = window.SecuGen || window.SGIFPLib
-
-      if (!this.sdk) {
-        console.error('Failed to load SecuGen SDK')
-        return false
-      }
-
-      // Initialize the SDK
-      const result = await this.sdk.Init()
-      if (result !== 0) {
-        console.error('Failed to initialize SecuGen SDK:', result)
-        return false
-      }
-
+      console.log('SecuGen Web API initialized (no library needed)')
       this.isInitialized = true
-      console.log('SecuGen SDK initialized successfully')
       return true
     } catch (error) {
-      console.error('Error initializing SecuGen SDK:', error)
+      console.error('Error initializing SecuGen Web API:', error)
       return false
     }
   }
@@ -81,74 +43,35 @@ class SecuGenScanner {
   /**
    * Get list of connected SecuGen devices
    */
-  async getDevices(): Promise<SecuGenDevice[]> {
-    if (!this.sdk || !this.isInitialized) {
+  async getDevices(): Promise<any[]> {
+    if (!this.isInitialized) {
       throw new Error('SDK not initialized. Call initialize() first.')
     }
 
-    try {
-      const devices = await this.sdk.GetDeviceList()
-      return devices || []
-    } catch (error) {
-      console.error('Error getting device list:', error)
-      return []
-    }
+    // SecuGen Web API auto-detects devices
+    return [{ deviceID: 0, deviceName: 'SecuGen Hamster Pro 20' }]
   }
 
   /**
    * Open a SecuGen device for capturing
    */
   async openDevice(deviceID: number = 0): Promise<boolean> {
-    if (!this.sdk || !this.isInitialized) {
+    if (!this.isInitialized) {
       throw new Error('SDK not initialized. Call initialize() first.')
     }
 
-    try {
-      const result = await this.sdk.OpenDevice(deviceID)
-      if (result !== 0) {
-        console.error('Failed to open device:', result)
-        return false
-      }
-
-      this.deviceID = deviceID
-      this.isDeviceOpen = true
-      
-      // Turn on LED to indicate device is ready
-      await this.setLED(true)
-      
-      console.log('Device opened successfully')
-      return true
-    } catch (error) {
-      console.error('Error opening device:', error)
-      return false
-    }
+    console.log('Device ready for capture')
+    this.deviceOpened = true
+    return true
   }
 
   /**
    * Close the currently open device
    */
   async closeDevice(): Promise<boolean> {
-    if (!this.sdk || !this.isDeviceOpen) {
-      return true
-    }
-
-    try {
-      // Turn off LED
-      await this.setLED(false)
-      
-      const result = await this.sdk.CloseDevice()
-      if (result !== 0) {
-        console.error('Failed to close device:', result)
-        return false
-      }
-
-      this.isDeviceOpen = false
-      console.log('Device closed successfully')
-      return true
-    } catch (error) {
-      console.error('Error closing device:', error)
-      return false
-    }
+    console.log('Device closed')
+    this.deviceOpened = false
+    return true
   }
 
   /**
@@ -157,67 +80,136 @@ class SecuGenScanner {
    * @param quality - Minimum quality threshold 0-100 (default: 50)
    */
   async captureFingerprint(timeout: number = 10000, quality: number = 50): Promise<Blob | null> {
-    if (!this.sdk || !this.isDeviceOpen) {
-      throw new Error('Device not open. Call openDevice() first.')
+    if (!this.isInitialized || !this.deviceOpened) {
+      throw new Error('Device not initialized. Call initialize() and openDevice() first.')
     }
 
-    try {
-      console.log('Waiting for fingerprint...')
-      
-      // Capture image with quality check
-      const image = await this.sdk.GetImageEx(timeout, quality)
-      
-      if (!image || !image.imageData) {
-        console.error('No image data received')
-        return null
+    return new Promise((resolve, reject) => {
+      try {
+        console.log('Waiting for fingerprint...')
+        
+        const xhr = new XMLHttpRequest()
+        
+        // Add timeout handler
+        xhr.timeout = timeout + 5000 // Add 5 seconds buffer
+        xhr.ontimeout = () => {
+          console.error('XMLHttpRequest timeout')
+          resolve(null)
+        }
+        
+        xhr.onreadystatechange = () => {
+          console.log(`XHR readyState: ${xhr.readyState}, status: ${xhr.status}`)
+          
+          if (xhr.readyState === 4) {
+            if (xhr.status === 200) {
+              try {
+                console.log('Response received, parsing JSON...')
+                const result: SecuGenResponse = JSON.parse(xhr.responseText)
+                
+                console.log('Response received:', result)
+                
+                if (result.ErrorCode !== 0) {
+                  console.error('Capture failed. Error code:', result.ErrorCode)
+                  console.error('Error description:', this.errorCodeToString(result.ErrorCode))
+                  resolve(null)
+                  return
+                }
+
+                if (!result.BMPBase64) {
+                  console.error('No image data received')
+                  resolve(null)
+                  return
+                }
+
+                console.log('Fingerprint captured successfully', {
+                  width: result.ImageWidth,
+                  height: result.ImageHeight,
+                  quality: result.ImageQuality,
+                  nfiq: result.NFIQ,
+                  serialNumber: result.SerialNumber
+                })
+
+                // Convert base64 to Blob
+                const blob = this.base64ToBlob(result.BMPBase64, 'image/bmp')
+                resolve(blob)
+              } catch (error) {
+                console.error('Error parsing response:', error)
+                console.error('Response text:', xhr.responseText)
+                reject(error)
+              }
+            } else if (xhr.status === 404) {
+              console.error('Service not found (404). Is SecuGen Web API Service running?')
+              resolve(null)
+            } else if (xhr.status === 0) {
+              console.error('Network error or CORS issue (status 0)')
+              resolve(null)
+            } else {
+              console.error('HTTP error:', xhr.status, xhr.statusText)
+              console.error('Response text:', xhr.responseText)
+              resolve(null)
+            }
+          }
+        }
+
+        xhr.onerror = (e) => {
+          console.error('Network error:', e)
+          
+          // If HTTPS failed and we haven't tried HTTP yet, try HTTP
+          if (!this.useHttp) {
+            console.log('HTTPS failed, trying HTTP...')
+            this.useHttp = true
+            // Retry with HTTP
+            this.captureFingerprint(timeout, quality).then(resolve).catch(reject)
+          } else {
+            console.error('Both HTTPS and HTTP failed')
+            reject(new Error('Network error - Check if SecuGen Web API Service is running'))
+          }
+        }
+
+        // Build URL-encoded parameters (matching official demo)
+        const params = new URLSearchParams()
+        params.append('Timeout', timeout.toString())
+        params.append('Quality', quality.toString())
+        params.append('licstr', this.licenseKey)
+        params.append('templateFormat', 'ISO')
+        params.append('imageWSQRate', '0.75')
+
+        console.log('Sending request to:', this.useHttp ? this.fallbackUrl : this.baseUrl)
+        console.log('Parameters:', params.toString())
+
+        xhr.open('POST', this.useHttp ? this.fallbackUrl : this.baseUrl, true)
+        xhr.send(params.toString())
+        
+        console.log('Request sent, waiting for response...')
+        
+      } catch (error) {
+        console.error('Error capturing fingerprint:', error)
+        reject(error)
       }
-
-      console.log('Fingerprint captured successfully', {
-        width: image.width,
-        height: image.height,
-        quality: image.quality
-      })
-
-      // Convert base64 to Blob
-      const blob = this.base64ToBlob(image.imageData, 'image/bmp')
-      return blob
-    } catch (error) {
-      console.error('Error capturing fingerprint:', error)
-      return null
-    }
+    })
   }
 
   /**
    * Set LED state (on/off)
    */
   async setLED(on: boolean): Promise<boolean> {
-    if (!this.sdk || !this.isDeviceOpen) {
-      return false
-    }
-
-    try {
-      await this.sdk.SetLedOn(on)
-      return true
-    } catch (error) {
-      console.error('Error setting LED:', error)
-      return false
-    }
+    // LED control is automatic in this API
+    console.log(`LED ${on ? 'ON' : 'OFF'} (automatic)`)
+    return true
   }
 
   /**
    * Get device information
    */
   async getDeviceInfo(): Promise<any> {
-    if (!this.sdk || !this.isDeviceOpen) {
-      throw new Error('Device not open. Call openDevice() first.')
+    if (!this.isInitialized) {
+      throw new Error('Device not initialized.')
     }
 
-    try {
-      const info = await this.sdk.GetDeviceInfo()
-      return info
-    } catch (error) {
-      console.error('Error getting device info:', error)
-      return null
+    return {
+      deviceName: 'SecuGen Hamster Pro 20',
+      width: 260,
+      height: 300
     }
   }
 
@@ -225,7 +217,29 @@ class SecuGenScanner {
    * Check if device is connected and ready
    */
   isReady(): boolean {
-    return this.isInitialized && this.isDeviceOpen
+    return this.isInitialized && this.deviceOpened
+  }
+
+  /**
+   * Convert error code to human-readable string
+   */
+  private errorCodeToString(errorCode: number): string {
+    const errorMap: { [key: number]: string } = {
+      51: 'System file load failure',
+      52: 'Sensor chip initialization failed',
+      53: 'Device not found',
+      54: 'Fingerprint image capture timeout',
+      55: 'No device available',
+      56: 'Driver load failed',
+      57: 'Wrong Image',
+      58: 'Lack of bandwidth',
+      59: 'Device Busy',
+      60: 'Cannot get serial number of the device',
+      61: 'Unsupported device',
+      63: 'SgiBioSrv didn\'t start; Try image capture again'
+    }
+
+    return errorMap[errorCode] || 'Unknown error code'
   }
 
   /**
@@ -251,8 +265,8 @@ class SecuGenScanner {
    */
   async cleanup(): Promise<void> {
     await this.closeDevice()
-    this.sdk = null
     this.isInitialized = false
+    this.deviceOpened = false
   }
 }
 

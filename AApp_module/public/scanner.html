@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Fingerprint Scanner</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        #fpImage {
+            border: 2px solid #ccc;
+            margin-top: 20px;
+            max-width: 100%;
+        }
+        button {
+            background: #0070f3;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #0051cc;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        #status {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f0f0f0;
+            border-radius: 5px;
+        }
+        .success {
+            background: #d4edda !important;
+            color: #155724;
+        }
+        .error {
+            background: #f8d7da !important;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <h1>Fingerprint Scanner</h1>
+    <button id="captureBtn" onclick="captureFingerprint()">Capture Fingerprint</button>
+    <div id="status">Ready to scan</div>
+    <img id="fpImage" style="display: none;" />
+
+    <script>
+        let capturedImageData = null;
+
+        function captureFingerprint() {
+            const btn = document.getElementById('captureBtn');
+            const status = document.getElementById('status');
+            const img = document.getElementById('fpImage');
+            
+            btn.disabled = true;
+            status.className = '';
+            status.innerHTML = 'Scanning... Place your finger on the scanner';
+            img.style.display = 'none';
+            
+            const uri = "https://localhost:8443/SGIFPCapture";
+            const xmlhttp = new XMLHttpRequest();
+            
+            xmlhttp.onreadystatechange = function () {
+                if (xmlhttp.readyState == 4) {
+                    if (xmlhttp.status == 200) {
+                        try {
+                            const fpobject = JSON.parse(xmlhttp.responseText);
+                            
+                            if (fpobject.ErrorCode == 0 && fpobject.BMPBase64) {
+                                // Success!
+                                capturedImageData = fpobject;
+                                img.src = "data:image/bmp;base64," + fpobject.BMPBase64;
+                                img.style.display = 'block';
+                                status.className = 'success';
+                                status.innerHTML = '✓ Fingerprint captured successfully!<br>' +
+                                    'Quality: ' + fpobject.ImageQuality + '<br>' +
+                                    'Size: ' + fpobject.ImageWidth + 'x' + fpobject.ImageHeight;
+                                
+                                // Send data back to parent window (Next.js app)
+                                if (window.opener) {
+                                    window.opener.postMessage({
+                                        type: 'FINGERPRINT_CAPTURED',
+                                        data: fpobject
+                                    }, '*');
+                                }
+                            } else {
+                                // Error from scanner
+                                status.className = 'error';
+                                status.innerHTML = '✗ Capture failed<br>Error Code: ' + fpobject.ErrorCode + '<br>' +
+                                    getErrorMessage(fpobject.ErrorCode);
+                            }
+                        } catch (e) {
+                            status.className = 'error';
+                            status.innerHTML = '✗ Failed to parse response: ' + e.message;
+                        }
+                    } else {
+                        status.className = 'error';
+                        status.innerHTML = '✗ Connection failed (Status: ' + xmlhttp.status + ')';
+                    }
+                    btn.disabled = false;
+                }
+            };
+            
+            xmlhttp.onerror = function() {
+                status.className = 'error';
+                status.innerHTML = '✗ Network error. Is SecuGen Web API Service running?';
+                btn.disabled = false;
+            };
+            
+            const params = "Timeout=10000&Quality=50&licstr=&templateFormat=ISO&imageWSQRate=0.75";
+            xmlhttp.open("POST", uri, true);
+            xmlhttp.send(params);
+        }
+
+        function getErrorMessage(errorCode) {
+            const errors = {
+                51: 'System file load failure',
+                52: 'Sensor chip initialization failed',
+                53: 'Device not found',
+                54: 'Fingerprint image capture timeout',
+                55: 'No device available',
+                56: 'Driver load failed',
+                57: 'Wrong Image',
+                58: 'Lack of bandwidth',
+                59: 'Device Busy',
+                60: 'Cannot get serial number',
+                61: 'Unsupported device',
+                63: 'Service didn\'t start',
+                10004: 'License error (60-day trial)'
+            };
+            return errors[errorCode] || 'Unknown error';
+        }
+    </script>
+</body>
+</html>

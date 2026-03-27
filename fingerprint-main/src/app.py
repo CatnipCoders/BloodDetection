@@ -248,16 +248,19 @@ def index():
 
 @app.route('/api/users', methods=['POST'])
 def register_user():
-    """Create a new user with their blood group and return the created user object."""
+    """Create a new user and return the created user object.
+    
+    Blood group is optional - can be added later via scan.
+    """
     data = request.get_json()
-    if not data or not all(k in data for k in ('name', 'email', 'blood_group')):
-        return jsonify({'error': 'Missing required fields: name, email, blood_group'}), 400
+    if not data or not all(k in data for k in ('name', 'email')):
+        return jsonify({'error': 'Missing required fields: name, email'}), 400
         
     try:
         user_id = create_user(
             name=data['name'],
             email=data['email'],
-            blood_group=data['blood_group'],
+            blood_group=data.get('blood_group', 'Unknown'),  # Default to Unknown if not provided
             confidence=data.get('confidence')
         )
         # Fetch the created user and return it so clients can immediately display it
