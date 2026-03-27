@@ -5,6 +5,11 @@
  * The SecuGen Web API uses a local service that runs on the client machine.
  */
 
+// SecuGen Web API URL
+const SECUGEN_API_URL = typeof window !== 'undefined' 
+  ? (process.env.NEXT_PUBLIC_SECUGEN_API_URL || 'https://localhost:8443')
+  : 'https://localhost:8443'
+
 export interface SecuGenDevice {
   deviceName: string
   deviceID: number
@@ -37,6 +42,36 @@ declare global {
   }
 }
 
+/**
+ * Load SecuGen Web API script
+ */
+async function loadSecuGenScript(): Promise<boolean> {
+  if (typeof window === 'undefined') return false
+
+  // Check if already loaded
+  if (window.SecuGen || window.SGIFPLib) {
+    return true
+  }
+
+  return new Promise((resolve) => {
+    const script = document.createElement('script')
+    script.src = `${SECUGEN_API_URL}/sgwebapi.js`
+    script.async = true
+    
+    script.onload = () => {
+      console.log('SecuGen Web API script loaded successfully')
+      resolve(true)
+    }
+    
+    script.onerror = () => {
+      console.error('Failed to load SecuGen Web API script')
+      resolve(false)
+    }
+    
+    document.head.appendChild(script)
+  })
+}
+
 class SecuGenScanner {
   private sdk: SecuGenSDK | null = null
   private deviceID: number = 0
@@ -49,6 +84,16 @@ class SecuGenScanner {
    */
   async initialize(): Promise<boolean> {
     try {
+      // Load SecuGen Web API script first
+      const scriptLoaded = await loadSecuGenScript()
+      if (!scriptLoaded) {
+        console.error('SecuGen Web API script not loaded. Please install SecuGen Web API.')
+        return false
+      }
+
+      // Wait a bit for script to initialize
+      await new Promise(resolve => setTimeout(resolve, 500))
+
       // Check if SecuGen Web API is available
       if (!window.SecuGen && !window.SGIFPLib) {
         console.error('SecuGen SDK not found. Please install SecuGen Web API.')

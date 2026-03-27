@@ -30,9 +30,23 @@ export default function ScanPage() {
   const [deviceInfo, setDeviceInfo] = useState<string>("")
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
+  // Check if running in local environment
+  const isLocalEnvironment = typeof window !== 'undefined' && 
+    (window.location.hostname === 'localhost' || 
+     window.location.hostname === '127.0.0.1' ||
+     window.location.hostname === '')
+
   // Initialize SecuGen scanner on component mount
   useEffect(() => {
     const initializeScanner = async () => {
+      // Skip SecuGen initialization in hosted/production environment
+      if (!isLocalEnvironment) {
+        setDeviceConnected(false)
+        setDeviceInfo('Live scanner only available in local mode (localhost)')
+        console.log('Production environment detected - SecuGen scanner disabled')
+        return
+      }
+
       try {
         const initialized = await secuGenScanner.initialize()
         if (initialized) {
@@ -68,7 +82,7 @@ export default function ScanPage() {
     return () => {
       secuGenScanner.cleanup()
     }
-  }, [])
+  }, [isLocalEnvironment])
 
   const handleScan = async () => {
     // Require either a connected device or an uploaded fingerprint image before scanning
@@ -81,15 +95,14 @@ export default function ScanPage() {
     setIsScanning(true)
     setScanComplete(false)
     setDetectedBloodGroup(null)
-    setConfidence(null)  // Clear previous confidence
+    setConfidence(null)
     setApiError(null)
 
-    const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000"
+    const API_URL = process.env.NEXT_PUBLIC_API_URL 
 
     try {
       let fingerprintBlob: Blob | null = null
 
-      // Try to capture from SecuGen device first
       if (deviceConnected && secuGenScanner.isReady()) {
         console.log('Capturing fingerprint from SecuGen device...')
         setApiError('Place your finger on the scanner...')
@@ -103,8 +116,6 @@ export default function ScanPage() {
         console.log('Fingerprint captured successfully')
         setApiError(null)
       } else if (uploadedBlob) {
-        // Use uploaded image - create a fresh copy to avoid caching
-        // Read the blob and create a new one to ensure fresh data
         const arrayBuffer = await uploadedBlob.arrayBuffer()
         fingerprintBlob = new Blob([arrayBuffer], { type: uploadedBlob.type })
         console.log('Using uploaded image, size:', fingerprintBlob.size, 'bytes')
@@ -112,17 +123,13 @@ export default function ScanPage() {
         throw new Error('No fingerprint source available')
       }
 
-      // Send to backend for blood group detection
       const form = new FormData()
-      // Use timestamp AND random number to ensure unique filename and prevent caching
       const timestamp = Date.now()
       const random = Math.random().toString(36).substring(7)
       form.append('image', fingerprintBlob, `fingerprint_${timestamp}_${random}.bmp`)
 
       console.log('Sending fingerprint to backend for analysis...')
-      console.log('Image size:', fingerprintBlob.size, 'bytes')
       
-      // Add cache-busting headers to prevent browser caching
       const res = await fetch(`${API_URL}/predict?t=${timestamp}&r=${random}`, {
         method: 'POST',
         body: form,
@@ -155,7 +162,6 @@ export default function ScanPage() {
       setApiError(err?.message ?? String(err))
       setIsScanning(false)
       
-      // Fallback to random blood group for demo purposes
       const randomGroup = bloodGroups[Math.floor(Math.random() * bloodGroups.length)]
       setDetectedBloodGroup(randomGroup)
       setScanComplete(true)
@@ -190,7 +196,6 @@ export default function ScanPage() {
     if (!f) return
     setUploadedBlob(f)
     setApiError(null)
-    // mark device as not connected (we have an uploaded image fallback)
     setDeviceConnected(false)
   }
 
@@ -199,9 +204,8 @@ export default function ScanPage() {
     setScanComplete(false)
     setDetectedBloodGroup(null)
     setConfidence(null)
-    setUploadedBlob(null)  // Clear uploaded image
+    setUploadedBlob(null)
     setApiError(null)
-    // Reset file input
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
@@ -210,11 +214,9 @@ export default function ScanPage() {
   const handleSaveResult = async () => {
     if (!detectedBloodGroup) return
 
-    // Store blood group
     localStorage.setItem("lastBloodGroup", detectedBloodGroup)
 
     if (existingUserId.trim()) {
-      // Update existing user
       try {
         const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000"
         const response = await fetch(`${API_URL}/api/users/${existingUserId}/blood-group`, {
@@ -239,7 +241,6 @@ export default function ScanPage() {
         alert("Error connecting to server")
       }
     } else if (isNewPatient && patientName && patientEmail) {
-      // Create new patient
       try {
         const { createUser } = await import("@/lib/api-client")
         const newUser = await createUser({
@@ -262,7 +263,6 @@ export default function ScanPage() {
         alert("Error connecting to server")
       }
     } else {
-      // No user ID - redirect to registration
       router.push(`/register?bloodGroup=${detectedBloodGroup}`)
     }
   }
@@ -270,16 +270,13 @@ export default function ScanPage() {
   const handleGenerateReport = async () => {
     if (!detectedBloodGroup) return
 
-    // Store blood group
     localStorage.setItem("lastBloodGroup", detectedBloodGroup)
     
-    // Get vitals from localStorage or use defaults
     const spo2 = localStorage.getItem("lastSpO2") || "98"
     const heartRate = localStorage.getItem("lastHeartRate") || "75"
     
     let userId = existingUserId
     
-    // If new patient, create them first
     if (isNewPatient && patientName && patientEmail) {
       try {
         const { createUser } = await import("@/lib/api-client")
@@ -302,7 +299,6 @@ export default function ScanPage() {
 
     const userName = patientName || localStorage.getItem("userName") || "Patient"
 
-    // Navigate to report
     router.push(
       `/report?bloodGroup=${detectedBloodGroup}&spo2=${spo2}&heartRate=${heartRate}&userName=${encodeURIComponent(userName)}${userId ? `&userId=${userId}` : ""}`
     )
@@ -403,7 +399,6 @@ export default function ScanPage() {
                     )}
                   </div>
 
-                  {/* Device status and upload fallback */}
                   <div className="mt-3">
                     <input ref={fileInputRef} type="file" accept="image/*" onChange={onFileChange} className="hidden" />
                     <div className="flex items-center justify-between">
@@ -421,7 +416,11 @@ export default function ScanPage() {
                         {deviceConnected === false && (
                           <div>
                             <span className="text-red-600 block">SecuGen scanner not detected</span>
-                            <span className="text-xs text-gray-500">Install SecuGen Web API or upload image</span>
+                            <span className="text-xs text-gray-500">
+                              {isLocalEnvironment 
+                                ? 'Install SecuGen Web API or upload image' 
+                                : 'Scanner only works on localhost - please upload image'}
+                            </span>
                           </div>
                         )}
                         {uploadedBlob && (
@@ -450,6 +449,17 @@ export default function ScanPage() {
                 <Alert className="border-red-200 bg-red-50">
                   <AlertCircle className="h-4 w-4 text-red-600" />
                   <AlertDescription className="text-red-900">{apiError}</AlertDescription>
+                </Alert>
+              )}
+
+              {!isLocalEnvironment && (
+                <Alert className="border-blue-200 bg-blue-50">
+                  <AlertCircle className="h-4 w-4 text-blue-600" />
+                  <AlertDescription className="text-blue-900">
+                    <strong>Note:</strong> Live fingerprint scanning requires localhost access. 
+                    In hosted mode, please upload a fingerprint image instead. 
+                    The scanner works when running on <code className="bg-blue-100 px-1 rounded">localhost:3000</code>
+                  </AlertDescription>
                 </Alert>
               )}
 
