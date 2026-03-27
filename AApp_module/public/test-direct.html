@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SecuGen Direct Test</title>
+</head>
+<body>
+    <h1>SecuGen Direct Test</h1>
+    <button onclick="testCapture()">Test Capture</button>
+    <div id="result"></div>
+    <img id="fpImage" style="border: 1px solid black; margin-top: 20px;" />
+
+    <script>
+        function testCapture() {
+            document.getElementById('result').innerHTML = 'Testing...';
+            
+            var uri = "https://localhost:8443/SGIFPCapture";
+            var xmlhttp = new XMLHttpRequest();
+            
+            xmlhttp.onreadystatechange = function () {
+                document.getElementById('result').innerHTML += '<br>ReadyState: ' + xmlhttp.readyState + ', Status: ' + xmlhttp.status;
+                
+                if (xmlhttp.readyState == 4 && xmlhttp.status == 200) {
+                    var fpobject = JSON.parse(xmlhttp.responseText);
+                    document.getElementById('result').innerHTML += '<br>Success! ErrorCode: ' + fpobject.ErrorCode;
+                    
+                    if (fpobject.ErrorCode == 0 && fpobject.BMPBase64) {
+                        document.getElementById("fpImage").src = "data:image/bmp;base64," + fpobject.BMPBase64;
+                        document.getElementById('result').innerHTML += '<br>Image captured!';
+                    } else {
+                        document.getElementById('result').innerHTML += '<br>Error: ' + fpobject.ErrorCode;
+                        document.getElementById('result').innerHTML += '<br>This might be a license issue (ErrorCode 10004) or device issue';
+                    }
+                }
+            }
+            
+            xmlhttp.onerror = function() {
+                document.getElementById('result').innerHTML += '<br>Network Error!';
+            }
+            
+            var params = "Timeout=10000&Quality=50&licstr=&templateFormat=ISO&imageWSQRate=0.75";
+            
+            xmlhttp.open("POST", uri, true);
+            xmlhttp.send(params);
+        }
+    </script>
+</body>
+</html>

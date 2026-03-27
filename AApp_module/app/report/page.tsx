@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, Suspense } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import { useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
@@ -14,7 +14,7 @@ import { generateHealthReport, type HealthReport } from "@/lib/health-report"
 import { getUserCompleteData, listUsers, type User as ApiUser } from "@/lib/api-client"
 import { PaymentAccessDialog } from "@/components/payment-access-dialog"
 
-function ReportPageContent() {
+export default function ReportPage() {
   const searchParams = useSearchParams()
   const [report, setReport] = useState<HealthReport | null>(null)
   const [loading, setLoading] = useState(true)
@@ -326,7 +326,7 @@ function ReportPageContent() {
                       placeholder="Enter patient ID"
                       value={patientId}
                       onChange={(e) => setPatientId(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handlePatientSearch()}
+                      onKeyPress={(e) => e.key === "Enter" && handlePatientSearch()}
                     />
                     <Button onClick={handlePatientSearch} className="bg-blue-600 hover:bg-blue-700">
                       <Search className="w-4 h-4 mr-2" />
@@ -653,20 +653,5 @@ function ReportPageContent() {
         </div>
       </div>
     </div>
-  )
-}
-
-export default function ReportPage() {
-  return (
-    <Suspense fallback={
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-red-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading report...</p>
-        </div>
-      </div>
-    }>
-      <ReportPageContent />
-    </Suspense>
   )
 }

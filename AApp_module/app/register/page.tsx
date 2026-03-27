@@ -11,8 +11,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { ArrowLeft, CheckCircle2, UserPlus, Fingerprint } from "lucide-react"
-import { createUser } from "@/lib/api"
+import { ArrowLeft, CheckCircle2, UserPlus, Fingerprint, AlertCircle } from "lucide-react"
+import { createUser } from "@/lib/api-client"
 
 const bloodGroups = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]
 
@@ -21,17 +21,19 @@ export default function RegisterPage() {
   const bloodGroupFromScan = searchParams.get("bloodGroup")
 
   const [formData, setFormData] = useState({
+    userId: "",
     fullName: "",
-    dateOfBirth: "",
+    age: "",
+    gender: "",
     bloodGroup: "",
     email: "",
     phone: "",
-    address: "",
   })
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [registrationComplete, setRegistrationComplete] = useState(false)
-  const [generatedId, setGeneratedId] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
   const router = useRouter()
+
 
   useEffect(() => {
     if (bloodGroupFromScan && bloodGroups.includes(bloodGroupFromScan)) {
@@ -39,58 +41,69 @@ export default function RegisterPage() {
     }
   }, [bloodGroupFromScan])
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const generateUserId = () => {
+    const timestamp = Date.now().toString().slice(-6)
+    return `P${timestamp}`
+  }
+
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsSubmitting(true)
-    // Call backend to create user
-    ;(async () => {
-      try {
-        const payload = {
-          name: formData.fullName,
-          email: formData.email,
-          blood_group: formData.bloodGroup,
-          // additional fields are stored client-side only; backend schema accepts name, email, blood_group
-        }
-        const created = await createUser(payload)
-        // Backend returns the created user object (id, name, email, blood_group...)
-        if (created && created.id) {
-          setGeneratedId(String(created.id))
-          setRegistrationComplete(true)
-          // Navigate to admin and pre-fill search to show the created user
-          try {
-            router.push(`/admin?newUserId=${created.id}`)
-          } catch (e) {
-            // Ignore navigation errors in non-client contexts
-          }
-        } else if (created && created.error) {
-          // Show error
-          alert('Registration failed: ' + created.error)
-        } else {
-          alert('Registration failed: unknown response from server')
-        }
-      } catch (err) {
-        console.error('Error creating user:', err)
-        alert('Registration failed. See console for details.')
-      } finally {
+    setError(null)
+   
+    if (formData.phone) {
+      if (formData.phone.length !== 10) {
+        setError('Phone number must be exactly 10 digits')
         setIsSubmitting(false)
+        return
       }
-    })()
+      // Check if it starts with 6, 7, 8, or 9 (valid Indian mobile numbers)
+      if (!/^[6-9]/.test(formData.phone)) {
+        setError('Invalid Indian mobile number. Must start with 6, 7, 8, or 9')
+        setIsSubmitting(false)
+        return
+      }
+    }
+
+    try {
+      const created = await createUser({
+        user_id: formData.userId,
+        name: formData.fullName,
+        email: formData.email,
+        phone: formData.phone || undefined,
+        age: formData.age ? parseInt(formData.age) : undefined,
+        gender: formData.gender || undefined,
+      })
+
+      if (created) {
+        setRegistrationComplete(true)
+      } else {
+        setError('Registration failed: No response from server')
+      }
+    } catch (err: any) {
+      console.error('Error creating user:', err)
+      setError(err.message || 'Registration failed. Please try again.')
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   const handleReset = () => {
     setFormData({
+      userId: "",
       fullName: "",
-      dateOfBirth: "",
+      age: "",
+      gender: "",
       bloodGroup: "",
       email: "",
       phone: "",
-      address: "",
     })
     setRegistrationComplete(false)
-    setGeneratedId(null)
+    setError(null)
   }
 
-  if (registrationComplete && generatedId) {
+  if (registrationComplete) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-red-50">
         <div className="container mx-auto px-4 py-8">
@@ -103,30 +116,37 @@ export default function RegisterPage() {
                   </div>
                 </div>
                 <CardTitle className="text-3xl text-green-700">Registration Successful!</CardTitle>
-                <CardDescription className="text-base">Your user ID has been generated</CardDescription>
+                <CardDescription className="text-base">Patient registered successfully</CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
                 <div className="bg-gradient-to-br from-green-50 to-green-100 p-8 rounded-lg border-2 border-green-200">
                   <div className="text-center space-y-4">
                     <div>
-                      <p className="text-sm text-gray-600 mb-2">Your User ID</p>
-                      <p className="text-5xl font-bold font-mono text-green-700">{generatedId}</p>
+                      <p className="text-sm text-gray-600 mb-2">Patient ID</p>
+                      <p className="text-5xl font-bold font-mono text-green-700">{formData.userId}</p>
                     </div>
                     <div className="pt-4 border-t border-green-200">
                       <p className="text-sm text-gray-600 mb-1">Registered Name</p>
                       <p className="text-xl font-semibold text-gray-800">{formData.fullName}</p>
                     </div>
-                    <div>
-                      <p className="text-sm text-gray-600 mb-1">Blood Group</p>
-                      <p className="text-3xl font-bold text-red-600">{formData.bloodGroup}</p>
-                    </div>
+                    {formData.age && (
+                      <div>
+                        <p className="text-sm text-gray-600 mb-1">Age</p>
+                        <p className="text-lg font-semibold text-gray-800">{formData.age} years</p>
+                      </div>
+                    )}
+                    {formData.gender && (
+                      <div>
+                        <p className="text-sm text-gray-600 mb-1">Gender</p>
+                        <p className="text-lg font-semibold text-gray-800">{formData.gender}</p>
+                      </div>
+                    )}
                   </div>
                 </div>
 
                 <Alert className="border-blue-200 bg-blue-50">
                   <AlertDescription className="text-blue-900 text-sm">
-                    Please save your User ID for future reference. You can use this ID for fingerprint scanning and
-                    verification.
+                    Please save your Patient ID for future reference. You can now scan your fingerprint to detect blood group.
                   </AlertDescription>
                 </Alert>
 
@@ -140,9 +160,10 @@ export default function RegisterPage() {
                   <Button onClick={handleReset} className="w-full bg-green-600 hover:bg-green-700">
                     Register Another
                   </Button>
-                  <Link href="/admin" className="w-full">
+                  <Link href="/scan" className="w-full">
                     <Button className="w-full bg-blue-600 hover:bg-blue-700">
-                      View in Admin
+                      <Fingerprint className="w-4 h-4 mr-2" />
+                      Scan Now
                     </Button>
                   </Link>
                 </div>
@@ -172,37 +193,55 @@ export default function RegisterPage() {
                   <UserPlus className="w-8 h-8 text-green-600" />
                 </div>
               </div>
-              <CardTitle className="text-3xl text-balance">User Registration</CardTitle>
+              <CardTitle className="text-3xl text-balance">Patient Registration</CardTitle>
               <CardDescription className="text-base">
-                {bloodGroupFromScan
-                  ? "Complete your registration with the detected blood group"
-                  : "Create a new user ID and register blood group information"}
+                Register a new patient without blood group (scan fingerprint later)
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {bloodGroupFromScan && (
-                <Alert className="border-green-200 bg-green-50 mb-6">
-                  <CheckCircle2 className="h-4 w-4 text-green-600" />
-                  <AlertDescription className="text-green-900">
-                    Blood group <strong>{bloodGroupFromScan}</strong> detected from fingerprint scan
-                  </AlertDescription>
-                </Alert>
-              )}
+              <Alert className="border-blue-200 bg-blue-50 mb-6">
+                <AlertDescription className="text-blue-900 text-sm">
+                  Blood group will be detected when you scan your fingerprint. You can register now and scan later.
+                </AlertDescription>
+              </Alert>
 
-              {!formData.bloodGroup && (
-                <Alert className="border-amber-200 bg-amber-50 mb-6">
-                  <Fingerprint className="h-4 w-4 text-amber-600" />
-                  <AlertDescription className="text-amber-900">
-                    Please complete fingerprint scanning first to detect your blood group before registration.{" "}
-                    <Link href="/scan" className="underline font-medium">
-                      Go to Scan Page
-                    </Link>
-                  </AlertDescription>
+              {error && (
+                <Alert className="border-red-200 bg-red-50 mb-6">
+                  <AlertCircle className="h-4 w-4 text-red-600" />
+                  <AlertDescription className="text-red-900">{error}</AlertDescription>
                 </Alert>
               )}
 
               <form onSubmit={handleSubmit} className="space-y-6">
                 <div className="space-y-4">
+                  {/* Patient ID */}
+                  <div className="space-y-2">
+                    <Label htmlFor="userId">Patient ID *</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="userId"
+                        placeholder="e.g., P001, PATIENT123"
+                        value={formData.userId}
+                        onChange={(e) => setFormData({ ...formData, userId: e.target.value.toUpperCase() })}
+                        required
+                        disabled={isSubmitting}
+                        className="font-mono flex-1"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setFormData({ ...formData, userId: generateUserId() })}
+                        disabled={isSubmitting}
+                      >
+                        Generate
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Create a unique ID for this patient. Click Generate for auto-ID.
+                    </p>
+                  </div>
+
+                  {/* Full Name */}
                   <div className="space-y-2">
                     <Label htmlFor="fullName">Full Name *</Label>
                     <Input
@@ -215,85 +254,91 @@ export default function RegisterPage() {
                     />
                   </div>
 
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="dateOfBirth">Date of Birth *</Label>
-                      <Input
-                        id="dateOfBirth"
-                        type="date"
-                        value={formData.dateOfBirth}
-                        onChange={(e) => setFormData({ ...formData, dateOfBirth: e.target.value })}
-                        required
-                        disabled={isSubmitting}
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="bloodGroup">Blood Group *</Label>
-                      <div className="relative">
-                        <Input
-                          id="bloodGroup"
-                          value={formData.bloodGroup}
-                          placeholder="Scan fingerprint to detect"
-                          readOnly
-                          disabled
-                          className="bg-gray-50 cursor-not-allowed"
-                        />
-                        <Fingerprint className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                      </div>
-                      {!bloodGroupFromScan && (
-                        <p className="text-xs text-amber-600">Blood group can only be set via fingerprint scanning</p>
-                      )}
-                    </div>
-                  </div>
-
+                  {/* Email and Phone */}
                   <div className="grid md:grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="email">Email Address *</Label>
                       <Input
                         id="email"
                         type="email"
-                        placeholder="email@example.com"
+                        placeholder="patient@example.com"
                         value={formData.email}
-                        onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                        onChange={(e) => {
+                          setFormData({ ...formData, email: e.target.value })
+                        
+                        }}
                         required
                         disabled={isSubmitting}
+                      />
+                      
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="phone">Phone Number (Optional)</Label>
+                      <Input
+                        id="phone"
+                        type="tel"
+                        placeholder="9876543210"
+                        value={formData.phone}
+                        onChange={(e) => {
+                          const value = e.target.value.replace(/\D/g, '').slice(0, 10)
+                          setFormData({ ...formData, phone: value })
+                        }}
+                        disabled={isSubmitting}
+                        maxLength={10}
+                        pattern="[6-9][0-9]{9}"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Must start with 6, 7, 8, or 9 (Indian mobile)
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Age and Gender */}
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="age">Age (Optional)</Label>
+                      <Input
+                        id="age"
+                        type="number"
+                        placeholder="25"
+                        value={formData.age}
+                        onChange={(e) => setFormData({ ...formData, age: e.target.value })}
+                        disabled={isSubmitting}
+                        min="0"
+                        max="150"
                       />
                     </div>
 
                     <div className="space-y-2">
-                      <Label htmlFor="phone">Phone Number *</Label>
-                      <Input
-                        id="phone"
-                        type="tel"
-                        placeholder="+1 (555) 000-0000"
-                        value={formData.phone}
-                        onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                        required
+                      <Label htmlFor="gender">Gender (Optional)</Label>
+                      <select
+                        id="gender"
+                        value={formData.gender}
+                        onChange={(e) => setFormData({ ...formData, gender: e.target.value })}
                         disabled={isSubmitting}
-                      />
+                        className="w-full px-3 py-2 border rounded-md bg-white"
+                      >
+                        <option value="">Select gender</option>
+                        <option value="Male">Male</option>
+                        <option value="Female">Female</option>
+                        <option value="Other">Other</option>
+                      </select>
                     </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="address">Address</Label>
-                    <Input
-                      id="address"
-                      placeholder="Enter address (optional)"
-                      value={formData.address}
-                      onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                      disabled={isSubmitting}
-                    />
                   </div>
                 </div>
 
                 <Button
                   type="submit"
                   className="w-full bg-green-600 hover:bg-green-700 text-lg py-6"
-                  disabled={isSubmitting || !formData.bloodGroup}
+                  disabled={isSubmitting}
                 >
-                  {isSubmitting ? "Registering..." : "Register User"}
+                  {isSubmitting ? "Registering..." : "Register Patient"}
                 </Button>
+
+                <p className="text-xs text-center text-muted-foreground">
+                  After registration, go to <Link href="/scan" className="text-blue-600 hover:underline">Scan Page</Link> to detect blood group
+                </p>
               </form>
             </CardContent>
           </Card>
