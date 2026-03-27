@@ -3,7 +3,6 @@
 import type React from "react"
 
 import { useState, useEffect } from "react"
-import { useRouter } from "next/navigation"
 import { useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
@@ -32,7 +31,6 @@ export default function RegisterPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [registrationComplete, setRegistrationComplete] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const router = useRouter()
 
 
   useEffect(() => {
@@ -77,6 +75,12 @@ export default function RegisterPage() {
       })
 
       if (created) {
+        // Store user info in localStorage
+        localStorage.setItem('currentUserId', created.id.toString())
+        localStorage.setItem('userName', created.name)
+        
+        // Update formData with the created user ID for display
+        setFormData(prev => ({ ...prev, userId: created.user_id }))
         setRegistrationComplete(true)
       } else {
         setError('Registration failed: No response from server')
